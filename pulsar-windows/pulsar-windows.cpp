@@ -11,6 +11,7 @@
 #include <x264.h>
 #include <stdint.h>
 #include <mutex>
+#include <ShlObj.h>
 
 #define uint8 uint8_t
 
@@ -30,6 +31,8 @@ SOCKET serSocket;
 std::mutex sendLock;
 BOOL forceKeyFrame = false;
 std::map<uint8_t, uint8_t> keymap;
+LPTSTR szCmdline = _tcsdup(TEXT("C:\\Windows\\Notepad.exe"));
+int udp_port = 0; //udp server port
 
 
 // 此代码模块中包含的函数的前向声明: 
@@ -90,10 +93,6 @@ void InitKeymap()
 	keymap[221] = 0xDD;       //   ]
 	keymap[13] = 0x0D;        // Enter
 
-
-
-
-
 	keymap[20] = 0x14;     // Caps Lock
 	keymap[65] = 0x41;     //  A
 	keymap[83] = 0x53;      // S
@@ -108,7 +107,6 @@ void InitKeymap()
 	keymap[222] = 0xDE;   //    " 
 	keymap[220] = 0xDC;    //   \
 
-
 	keymap[16] = 0x10;         //   SHIFT key
 	keymap[90] = 0x5A;        //   Z
 	keymap[88] = 0x58;         //  X
@@ -122,10 +120,6 @@ void InitKeymap()
 	keymap[191] = 0xBF;      //   ?
 	keymap[16] = 0x10;          // SHIFT key
 
-
-
-
-
 	keymap[17] = 0x11;      //  CTRL key
 	keymap[91] = 0xA4;       //Left MENU
 	keymap[18] = 0x12;        //ALT key
@@ -134,9 +128,6 @@ void InitKeymap()
 	keymap[92] = 0xA5;     //  Right MENU key
 	keymap[93] = 0x02;    //  Right mouse button
 	keymap[17] = 0x11;     //   CTRL key
-
-
-
 
 	keymap[145] = 0x91;
 	keymap[19] = 0;
@@ -179,6 +170,32 @@ BOOL isTopWindow(HWND hwnd)
 	return (parent == GetDesktopWindow());
 }
 
+void recover(sockaddr_in client)
+{
+	std::map<int, cip_window_t*>::iterator it;
+	for (it = windows.begin(); it != windows.end(); it++) {
+		cip_window_t *window = it->second;
+		cip_event_window_create_t cewc;
+		cewc.type = CIP_EVENT_WINDOW_CREATE;
+		cewc.wid = window->wid;
+		cewc.x = window->x;
+		cewc.y = window->y;
+		cewc.width = window->width;
+		cewc.height = window->height;
+		cewc.bare = 1;
+		sendData((char*)&cewc, sizeof(cewc));
+		//DWORD dwStyle = GetWindowLong(hwnd, GWL_STYLE);
+		if (IsWindowVisible((HWND)window->wid)) {
+			window->visible = true;
+			cip_event_window_show_t cews;
+			cews.type = CIP_EVENT_WINDOW_SHOW;
+			cews.wid = window->wid;
+			cews.bare = 1;
+			sendData(&cews, sizeof(cews));
+		}
+	}
+}
+
 int CreateUDPServer()
 {
 	WSADATA wsaData;
@@ -198,7 +215,7 @@ int CreateUDPServer()
 
 	sockaddr_in serAddr;
 	serAddr.sin_family = AF_INET;
-	serAddr.sin_port = htons(24055);
+	serAddr.sin_port = 0; // htons(24055);
 	serAddr.sin_addr.S_un.S_addr = INADDR_ANY;
 	if (bind(serSocket, (sockaddr*)&serAddr, sizeof(serAddr)) == SOCKET_ERROR) {
 		closesocket(serSocket);
@@ -206,15 +223,30 @@ int CreateUDPServer()
 		return 1;
 	}
 
+	/* get udp server random port*/
 	sockaddr_in info;
 	memset(&info, 0, sizeof(info));
 	int info_len = sizeof(info);
 	getsockname(serSocket, (sockaddr*)&info, &info_len);
 
-	int a = ntohs(info.sin_port);
-	wchar_t buffer[256];
-	wsprintfW(buffer, L"%d", a);
-	//MessageBoxW(nullptr, buffer, buffer, MB_OK);
+	/* set udp port to global varible */
+	udp_port = ntohs(info.sin_port);
+
+	/* write port info to file c:/users/%user%/pulsar-port.txt */
+	WCHAR filepath[128];
+	memset(filepath, 0, sizeof(filepath));
+	PWSTR path = NULL;
+	SHGetKnownFolderPath(FOLDERID_Profile, 0, NULL, &path);
+	wcscat_s(filepath, 128, path);
+	wcscat_s(filepath, 128, _T("/pulsar-port.txt"));
+
+	HANDLE fp = CreateFile(filepath, GENERIC_ALL, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+	char buf[10];
+	memset(buf, 0, 10);
+	_itoa_s(udp_port, buf, 10);
+	DWORD written = 0;
+	WriteFile(fp, buf, strlen(buf), &written, NULL);
+	CloseHandle(fp);
 
 	sockaddr_in cliAddr;
 	int addrLen = sizeof(cliAddr);
@@ -224,8 +256,9 @@ int CreateUDPServer()
 		int len = recvfrom(serSocket, data, 255, 0, (sockaddr*)&cliAddr, &addrLen);
 		//MessageBox(NULL, _T("ok"), _T("i"), MB_OK);
 		if (strcmp(data, "listen") == 0) {
-			forceKeyFrame = true;
 			clients.push_back(cliAddr);
+			recover(cliAddr);
+			forceKeyFrame = true;
 			continue;
 		}
 		switch (data[0]) {
@@ -441,185 +474,7 @@ RECT getDamageRect()
 	return rc;
 }
 
-int RGB2YUV_YR[256], RGB2YUV_YG[256], RGB2YUV_YB[256];
-
-int RGB2YUV_UR[256], RGB2YUV_UG[256], RGB2YUV_UBVR[256];
-
-int RGB2YUV_VG[256], RGB2YUV_VB[256];
-
-void InitLookupTable()
-
-{
-
-	int i;
-
-	for (i = 0; i < 256; i++) RGB2YUV_YR[i] = (float)65.481 * (i << 8);
-
-	for (i = 0; i < 256; i++) RGB2YUV_YG[i] = (float)128.553 * (i << 8);
-
-	for (i = 0; i < 256; i++) RGB2YUV_YB[i] = (float)24.966 * (i << 8);
-
-	for (i = 0; i < 256; i++) RGB2YUV_UR[i] = (float)37.797 * (i << 8);
-
-	for (i = 0; i < 256; i++) RGB2YUV_UG[i] = (float)74.203 * (i << 8);
-
-	for (i = 0; i < 256; i++) RGB2YUV_VG[i] = (float)93.786 * (i << 8);
-
-	for (i = 0; i < 256; i++) RGB2YUV_VB[i] = (float)18.214 * (i << 8);
-
-	for (i = 0; i < 256; i++) RGB2YUV_UBVR[i] = (float)112 * (i << 8);
-
-}
-
-int ConvertRGB2YUV(int w, int h, unsigned char *bmp, uint8_t *yuv)
-
-{
-
-	uint8_t *u, *v, *y, *uu, *vv;
-
-	uint8_t *pu1, *pu2, *pu3, *pu4;
-
-	uint8_t *pv1, *pv2, *pv3, *pv4;
-
-	unsigned char *r, *g, *b;
-
-	int i, j;
-
-	uu = new uint8_t[w*h];
-
-	vv = new uint8_t[w*h];
-
-	if (uu == NULL || vv == NULL)
-
-		return 0;
-
-	y = yuv;
-
-	u = uu;
-
-	v = vv;
-
-	// Get r,g,b pointers from bmp image data....
-
-	r = bmp;
-
-	g = bmp + 1;
-
-	b = bmp + 2;
-
-	//Get YUV values for rgb values...
-
-	for (i = 0; i<h; i++)
-
-	{
-
-		for (j = 0; j<w; j++)
-
-		{
-
-			*y++ = (RGB2YUV_YR[*r] + RGB2YUV_YG[*g] + RGB2YUV_YB[*b] + 1048576) >> 16;
-
-			*u++ = (-RGB2YUV_UR[*r] - RGB2YUV_UG[*g] + RGB2YUV_UBVR[*b] + 8388608) >> 16;
-
-			*v++ = (RGB2YUV_UBVR[*r] - RGB2YUV_VG[*g] - RGB2YUV_VB[*b] + 8388608) >> 16;
-
-			r += 3;
-
-			g += 3;
-
-			b += 3;
-
-		}
-
-	}
-
-	// Now sample the U & V to obtain YUV 4:2:0 format
-
-	// Sampling mechanism...
-
-	// Get the right pointers...
-
-	u = yuv + w*h;
-
-	v = u + (w*h) / 4;
-
-	// For U
-
-	pu1 = uu;
-
-	pu2 = pu1 + 1;
-
-	pu3 = pu1 + w;
-
-	pu4 = pu3 + 1;
-
-	// For V
-
-	pv1 = vv;
-
-	pv2 = pv1 + 1;
-
-	pv3 = pv1 + w;
-
-	pv4 = pv3 + 1;
-
-	// Do sampling....
-
-	for (i = 0; i<h; i += 2)
-	{
-
-		for (j = 0; j<w; j += 2)
-
-		{
-
-			*u++ = (*pu1 + *pu2 + *pu3 + *pu4) >> 2;
-
-			*v++ = (*pv1 + *pv2 + *pv3 + *pv4) >> 2;
-
-			pu1 += 2;
-
-			pu2 += 2;
-
-			pu3 += 2;
-
-			pu4 += 2;
-
-			pv1 += 2;
-
-			pv2 += 2;
-
-			pv3 += 2;
-
-			pv4 += 2;
-
-		}
-
-		pu1 += w;
-
-		pu2 += w;
-
-		pu3 += w;
-
-		pu4 += w;
-
-		pv1 += w;
-
-		pv2 += w;
-
-		pv3 += w;
-
-		pv4 += w;
-
-	}
-
-	delete uu;
-
-	delete vv;
-
-	return 1;
-
-}
-
+/* streaming screen image to h.264 stream */
 DWORD WINAPI ScreenStreamThread(LPVOID lp)
 {
 	HWND hDesktop = GetDesktopWindow();
@@ -642,7 +497,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	param.b_vfr_input = 0;
 	param.b_repeat_headers = 1;
 	param.b_annexb = 1;
-	param.rc.f_rf_constant = 25;
+	param.rc.f_rf_constant = 26;
 	param.rc.i_rc_method = X264_RC_CRF;
 
 	if (x264_param_apply_profile(&param, "baseline") < 0) {
@@ -670,6 +525,10 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	x264_picture_t picout;
 	char *buf = (char*)malloc(70000);
 	while (true) {
+		if (clients.empty()) {
+			Sleep(100);
+			continue;
+		}
 		BitBlt(memDC, 0, 0, width, height, desktopDC, 0, 0, SRCCOPY);
 
 		BITMAPINFOHEADER bmi = { 0 };
@@ -686,7 +545,6 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 			pic.img.plane[1], width / 2,
 			pic.img.plane[2], width / 2,
 			width, height);
-		//ConvertRGB2YUV(width, height, data, pic.img.plane[0]);
 
 		if (forceKeyFrame) {
 			pic.i_type = X264_TYPE_KEYFRAME;
@@ -709,7 +567,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 			sendData(buf, length);
 		}
 		pic.i_type = X264_TYPE_AUTO;
-		Sleep(20);
+		Sleep(60);
 	}
 
 	free(buf);
@@ -718,6 +576,109 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 fail2:
 	x264_picture_clean(&pic);
 	return 1;
+}
+
+DWORD WINAPI RunCloudware(LPVOID lp)
+{
+	Sleep(1000); // wait for main window show
+	STARTUPINFO si;
+	PROCESS_INFORMATION pi;
+
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+
+	if (_tcscmp(szCmdline, _T("iexplore")) == 0) {
+		WCHAR cmd[] = _T("c:\\Program Files\\Internet Explorer\\iexplore.exe");
+		if (!CreateProcess(NULL,   // No module name (use command line)
+			cmd,        // Command line
+			NULL,           // Process handle not inheritable
+			NULL,           // Thread handle not inheritable
+			FALSE,          // Set handle inheritance to FALSE
+			0,              // No creation flags
+			NULL,           // Use parent's environment block
+			NULL,           // Use parent's starting directory 
+			&si,            // Pointer to STARTUPINFO structure
+			&pi)) {
+			goto err;
+		}
+	} else {
+		// Start the child process. 
+		if (!CreateProcess(NULL,   // No module name (use command line)
+			szCmdline,        // Command line
+			NULL,           // Process handle not inheritable
+			NULL,           // Thread handle not inheritable
+			FALSE,          // Set handle inheritance to FALSE
+			0,              // No creation flags
+			NULL,           // Use parent's environment block
+			NULL,           // Use parent's starting directory 
+			&si,            // Pointer to STARTUPINFO structure
+			&pi)           // Pointer to PROCESS_INFORMATION structure
+			) {
+			goto err;
+		}
+	}
+
+	WaitForSingleObject(pi.hProcess, INFINITE);
+
+err:
+	// Close process and thread handles. 
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+	cip_event_exit_t ext;
+	ext.type = CIP_EVENT_EXIT;
+	sendData(&ext, sizeof(ext));
+
+	/* logout user */
+	ExitWindowsEx(EWX_LOGOFF, SHTDN_REASON_FLAG_PLANNED);
+
+	/* TODO: clean memory and exit*/
+	exit(0);
+}
+
+
+DWORD WINAPI SyncState(LPVOID lp)
+{
+	while (true) {
+		Sleep(2000);
+		std::map<int, cip_window_t*>::iterator it;
+		for (it = windows.begin(); it != windows.end(); it++) {
+			cip_window_t *window = it->second;
+			BOOL visible = IsWindowVisible((HWND)window->wid);
+			if (visible) {
+				window->visible = visible;
+				cip_event_window_show_t cews;
+				cews.type = CIP_EVENT_WINDOW_SHOW;
+				cews.wid = window->wid;
+				cews.bare = 1;
+				sendData(&cews, sizeof(cews));
+			} else {
+				window->visible = visible;
+				cip_event_window_show_t cews;
+				cews.type = CIP_EVENT_WINDOW_HIDE;
+				cews.wid = window->wid;
+				cews.bare = 1;
+				sendData(&cews, sizeof(cews));
+			}
+			
+			Sleep(30);
+
+			RECT rc;
+			GetWindowRect((HWND)window->wid, &rc);
+			cip_event_window_configure_t cewc;
+			cewc.type = CIP_EVENT_WINDOW_CONFIGURE;
+			cewc.wid = window->wid;
+			cewc.x = rc.left;
+			cewc.y = rc.top;
+			cewc.width = rc.right - rc.left;
+			cewc.height = rc.bottom - rc.top;
+			cewc.bare = 1;
+			cewc.above = 0;
+			sendData(&cewc, sizeof(cewc));
+			Sleep(30);
+		}
+	}
+	
 }
 
 void sendData(void *payload, int length)
@@ -730,6 +691,12 @@ void sendData(void *payload, int length)
 	sendLock.unlock();
 }
 
+BOOL FileExists(LPCTSTR szPath)
+{
+	DWORD dwAttrib = GetFileAttributes(szPath);
+	return (dwAttrib != INVALID_FILE_ATTRIBUTES && !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY));
+}
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
                      _In_ LPWSTR    lpCmdLine,
@@ -739,9 +706,24 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(lpCmdLine);
 
     // TODO: 在此放置代码。
+	//Sleep(3000); // wait for desktop init
+
+	WCHAR filepath[128];
+	memset(filepath, 0, sizeof(filepath));
+	PWSTR path = NULL;
+	SHGetKnownFolderPath(FOLDERID_Profile, 0, NULL, &path);
+	wcscat_s(filepath, 128, path);
+	wcscat_s(filepath, 128, _T("/pulsar.norun"));
+
+	/* if pulsar.norun exists, exit pulsar */
+	if (FileExists(filepath)) {
+		return 0;
+	}
+	if (_tcscmp(lpCmdLine, _T("")) != 0) {
+		szCmdline = lpCmdLine;
+	}
 
 	InitKeymap();
-	InitLookupTable();
 
     // 初始化全局字符串
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
@@ -757,6 +739,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_PULSARWINDOWS));
 
 	CreateThread(NULL, 0, ServerThread, NULL, 0, NULL);
+
 	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
 	//CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
 
@@ -776,6 +759,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		return 0;
 	}
 
+	CreateThread(NULL, 0, RunCloudware, NULL, 0, NULL);
+	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
+
     MSG msg;
 
     // 主消息循环: 
@@ -783,7 +769,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     {
 		switch (msg.message) {
 		case WM_APP + HCBT_CREATEWND: {
-			Sleep(30);
+			Sleep(100);
 			HWND hwnd = (HWND)msg.wParam;
 			if (isTopWindow(hwnd)) {
 				RECT rc;
@@ -800,7 +786,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				cewc.height = window->height;
 				cewc.bare = 1;
 				sendData((char*)&cewc, sizeof(cewc));
-				DWORD dwStyle = GetWindowLong(hwnd, GWL_STYLE);
+				//DWORD dwStyle = GetWindowLong(hwnd, GWL_STYLE);
 				if (IsWindowVisible(hwnd)) {
 						window->visible = true;
 						cip_event_window_show_t cews;
@@ -809,7 +795,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 						cews.bare = 1;
 						sendData(&cews, sizeof(cews));
 				}
-				//forceKeyFrame = true;
 				
 			}
 			break;
@@ -856,7 +841,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				break;
 			}
 
-			//Sleep(100);
+			Sleep(30);
 			cip_window_t *window = windows[(int)hwnd];
 			RECT rc;
 			GetWindowRect(hwnd, &rc);
@@ -916,6 +901,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
     }
 
+
     return (int) msg.wParam;
 }
 
@@ -969,8 +955,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
       return FALSE;
    }
 
-   ShowWindow(hWnd, nCmdShow);
-   UpdateWindow(hWnd);
+   //ShowWindow(hWnd, nCmdShow);
+   //UpdateWindow(hWnd);
 
    // 主窗口赋给全局变量
    hWndServer = hWnd;
