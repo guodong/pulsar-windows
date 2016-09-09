@@ -13,9 +13,18 @@
 #include <mutex>
 #include <ShlObj.h>
 
+extern "C"
+{
+#include <libswscale\swscale.h>
+#include <libavcodec\avcodec.h>
+}
+
+
 #define uint8 uint8_t
 
 #pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "swscale.lib")
+#pragma comment(lib, "avcodec.lib")
 
 #define MAX_LOADSTRING 100
 
@@ -26,6 +35,8 @@ WCHAR szWindowClass[MAX_LOADSTRING];            // 主窗口类名
 HWND hWndServer;								// 接受hook消息的主窗口句柄
 typedef std::list<sockaddr_in> CLIENTS;
 CLIENTS clients;
+
+SRWLOCK windowsRWLock;
 std::map<int, cip_window_t*> windows;
 SOCKET serSocket;
 std::mutex sendLock;
@@ -491,7 +502,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	param.i_width = width;
 	param.i_height = height;
 	param.i_slice_max_size = 65000;
-	param.i_threads = 4;
+	param.i_threads = 0;
 	
 
 	param.b_vfr_input = 0;
@@ -499,6 +510,9 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	param.b_annexb = 1;
 	param.rc.f_rf_constant = 26;
 	param.rc.i_rc_method = X264_RC_CRF;
+	//param.rc.i_vbv_max_bitrate = 5000;
+	//param.rc.i_bitrate = 4600;
+
 
 	if (x264_param_apply_profile(&param, "baseline") < 0) {
 		return 1;
@@ -524,9 +538,15 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	int32_t i_nal = 0;
 	x264_picture_t picout;
 	char *buf = (char*)malloc(70000);
+
+	SwsContext *ctx = sws_getContext(width, height, AV_PIX_FMT_RGB32, width, height, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
+	AVPicture pFrameYUV, pFrameRGB;
+
+	avpicture_fill(&pFrameYUV, pic.img.plane[0], AV_PIX_FMT_YUV420P, width, height);
+	const int inLinesize[1] = { 4 * width };
 	while (true) {
 		if (clients.empty()) {
-			Sleep(100);
+			Sleep(1000);
 			continue;
 		}
 		BitBlt(memDC, 0, 0, width, height, desktopDC, 0, 0, SRCCOPY);
@@ -540,11 +560,14 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		bmi.biCompression = BI_RGB;
 
 		GetDIBits(memDC, hbmp, 0, height, data, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
-		ARGBToI420(data, width * 4,
+
+		sws_scale(ctx, (const uint8_t * const *)&data, inLinesize, 0, height, pFrameYUV.data, pFrameYUV.linesize);
+
+		/*ARGBToI420(data, width * 4,
 			pic.img.plane[0], width,
 			pic.img.plane[1], width / 2,
 			pic.img.plane[2], width / 2,
-			width, height);
+			width, height);*/
 
 		if (forceKeyFrame) {
 			pic.i_type = X264_TYPE_KEYFRAME;
@@ -567,9 +590,9 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 			sendData(buf, length);
 		}
 		pic.i_type = X264_TYPE_AUTO;
-		Sleep(60);
+		Sleep(100);
 	}
-
+	sws_freeContext(ctx);
 	free(buf);
 	free(data);
 	return 0;
@@ -640,8 +663,9 @@ err:
 DWORD WINAPI SyncState(LPVOID lp)
 {
 	while (true) {
-		Sleep(2000);
+		Sleep(4000);
 		std::map<int, cip_window_t*>::iterator it;
+		AcquireSRWLockShared(&windowsRWLock);
 		for (it = windows.begin(); it != windows.end(); it++) {
 			cip_window_t *window = it->second;
 			BOOL visible = IsWindowVisible((HWND)window->wid);
@@ -660,9 +684,7 @@ DWORD WINAPI SyncState(LPVOID lp)
 				cews.bare = 1;
 				sendData(&cews, sizeof(cews));
 			}
-			
-			Sleep(30);
-
+			Sleep(200);
 			RECT rc;
 			GetWindowRect((HWND)window->wid, &rc);
 			cip_event_window_configure_t cewc;
@@ -675,8 +697,8 @@ DWORD WINAPI SyncState(LPVOID lp)
 			cewc.bare = 1;
 			cewc.above = 0;
 			sendData(&cewc, sizeof(cewc));
-			Sleep(30);
 		}
+		ReleaseSRWLockShared(&windowsRWLock);
 	}
 	
 }
@@ -707,7 +729,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     // TODO: 在此放置代码。
 	//Sleep(3000); // wait for desktop init
-
+	InitializeSRWLock(&windowsRWLock);
 	WCHAR filepath[128];
 	memset(filepath, 0, sizeof(filepath));
 	PWSTR path = NULL;
@@ -776,7 +798,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				GetWindowRect(hwnd, &rc);
 				
 				cip_window_t *window = cip_window_create((uint32_t)hwnd, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, CIP_WINDOW_BARE);
+
+				AcquireSRWLockExclusive(&windowsRWLock);
 				windows[window->wid] = window;
+				ReleaseSRWLockExclusive(&windowsRWLock);
 				cip_event_window_create_t cewc;
 				cewc.type = CIP_EVENT_WINDOW_CREATE;
 				cewc.wid = window->wid;
@@ -800,24 +825,32 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			break;
 		}
 		case WM_APP + HCBT_DESTROYWND: {
+			AcquireSRWLockShared(&windowsRWLock);
 			if (windows.find((int)msg.wParam) == windows.end()) {
+				ReleaseSRWLockShared(&windowsRWLock);
 				break;
 			}
+			ReleaseSRWLockShared(&windowsRWLock);
 			cip_window_t *window = windows[(int)msg.wParam];
 			cip_event_window_destroy_t cewd;
 			cewd.type = CIP_EVENT_WINDOW_DESTROY;
 			cewd.wid = (u32)msg.wParam;
 			sendData(&cewd, sizeof(cewd));
+			AcquireSRWLockExclusive(&windowsRWLock);
 			windows.erase((int)msg.wParam);
+			ReleaseSRWLockExclusive(&windowsRWLock);
 			free(window);
 			break;
 		}
 		case WM_APP + 0x4000 + WM_SHOWWINDOW: {
 			
 			HWND hwnd = (HWND)msg.wParam;
+			AcquireSRWLockShared(&windowsRWLock);
 			if (windows.find((int)msg.wParam) == windows.end()) {
+				ReleaseSRWLockShared(&windowsRWLock);
 				break;
 			}
+			ReleaseSRWLockShared(&windowsRWLock);
 			cip_window_t *window = windows[(int)hwnd];
 			BOOL visible = msg.lParam;// IsWindowVisible(hwnd);
 			window->visible = visible;
@@ -837,10 +870,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		}
 		case WM_APP + 0x4000 + WM_SIZE: {
 			HWND hwnd = (HWND)msg.wParam;
-			if (windows.find((int)hwnd) == windows.end()) {
+			AcquireSRWLockShared(&windowsRWLock);
+			if (windows.find((int)msg.wParam) == windows.end()) {
+				ReleaseSRWLockShared(&windowsRWLock);
 				break;
 			}
-
+			ReleaseSRWLockShared(&windowsRWLock);
 			Sleep(30);
 			cip_window_t *window = windows[(int)hwnd];
 			RECT rc;
@@ -867,9 +902,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		}
 		case WM_APP + 0x4000 + WM_WINDOWPOSCHANGED: {
 			HWND hwnd = (HWND)msg.wParam;
-			if (windows.find((int)hwnd) == windows.end()) {
+			AcquireSRWLockShared(&windowsRWLock);
+			if (windows.find((int)msg.wParam) == windows.end()) {
+				ReleaseSRWLockShared(&windowsRWLock);
 				break;
 			}
+			ReleaseSRWLockShared(&windowsRWLock);
 			//Sleep(20);
 			cip_window_t *window = windows[(int)hwnd];
 			RECT rc;

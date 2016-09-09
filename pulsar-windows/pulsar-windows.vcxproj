@@ -76,9 +76,9 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>C:\Users\Administrator\Downloads\curl-7.50.1\include;C:\x264;$(IncludePath)</IncludePath>
+    <IncludePath>C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\include;C:\x264;$(IncludePath)</IncludePath>
     <ReferencePath>C:\x264-64;$(ReferencePath)</ReferencePath>
-    <LibraryPath>C:\x264-64;$(LibraryPath)</LibraryPath>
+    <LibraryPath>C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\lib;C:\x264-64;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
@@ -108,13 +108,13 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <SDLCheck>true</SDLCheck>
+      <SDLCheck>false</SDLCheck>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\x264;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libx264.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\lib;C:\x264;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libx264.lib;avcodec.lib;swscale.lib;avformat.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
