@@ -275,7 +275,15 @@ int CreateUDPServer()
 		switch (data[0]) {
 		case CIP_EVENT_MOUSE_MOVE: {
 			cip_event_mouse_move_t *cemm = (cip_event_mouse_move_t*)data;
-			SetCursorPos(cemm->x, cemm->y);
+			// do not use SetCursorPos, it will conflict with each user
+			// SetCursorPos(cemm->x, cemm->y);
+			INPUT input;
+			input.type = INPUT_MOUSE;
+			input.mi.mouseData = 0;
+			input.mi.dx = cemm->x * (65536 / GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
+			input.mi.dy = cemm->y * (65536 / GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
+			input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
+			SendInput(1, &input, sizeof(input));
 			break;
 		}
 		case CIP_EVENT_MOUSE_DOWN: {
@@ -497,21 +505,30 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	toeven((size_t*)&height);
 
 	x264_param_t param;
-	x264_param_default_preset(&param, "ultrafast", "zerolatency");
+	x264_param_default_preset(&param, "slow", "zerolatency");
 	param.i_csp = X264_CSP_I420;
 	param.i_width = width;
 	param.i_height = height;
 	param.i_slice_max_size = 65000;
 	param.i_threads = 0;
+	param.i_keyint_max = 30;
 	
 
 	param.b_vfr_input = 0;
 	param.b_repeat_headers = 1;
 	param.b_annexb = 1;
-	param.rc.f_rf_constant = 26;
+	param.rc.f_rf_constant = 28;
+	param.rc.f_rf_constant_max = 50;
 	param.rc.i_rc_method = X264_RC_CRF;
-	//param.rc.i_vbv_max_bitrate = 5000;
-	//param.rc.i_bitrate = 4600;
+	param.rc.i_vbv_max_bitrate = 1800;
+	param.rc.i_bitrate = 1500;
+	//param.b_intra_refresh = 1;
+	param.rc.i_qp_max = 40;
+	param.rc.i_qp_constant = 25;
+	/*param.i_fps_num = 10;
+	param.i_fps_den = 1;
+	param.i_timebase_num = 1;
+	param.i_timebase_den = 10;*/
 
 
 	if (x264_param_apply_profile(&param, "baseline") < 0) {
@@ -522,6 +539,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	if (x264_picture_alloc(&pic, param.i_csp, param.i_width, param.i_height) < 0) {
 		return 1;
 	}
+	pic.i_pts = 0;
 
 	x264_t *encoder = x264_encoder_open(&param);
 	if (!encoder) {
@@ -572,7 +590,6 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		if (forceKeyFrame) {
 			pic.i_type = X264_TYPE_KEYFRAME;
 		}
-		pic.i_pts++;
 
 
 		int i_frame_size = x264_encoder_encode(encoder, &nal, &i_nal, &pic, &picout);
@@ -589,8 +606,9 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 			memcpy(buf + sizeof(cip_event_window_frame_ws_t), nal[i].p_payload, nal[i].i_payload);
 			sendData(buf, length);
 		}
+		pic.i_pts++;
 		pic.i_type = X264_TYPE_AUTO;
-		Sleep(100);
+		//Sleep(50);
 	}
 	sws_freeContext(ctx);
 	free(buf);
@@ -663,7 +681,7 @@ err:
 DWORD WINAPI SyncState(LPVOID lp)
 {
 	while (true) {
-		Sleep(4000);
+		Sleep(10000);
 		std::map<int, cip_window_t*>::iterator it;
 		AcquireSRWLockShared(&windowsRWLock);
 		for (it = windows.begin(); it != windows.end(); it++) {
@@ -684,7 +702,7 @@ DWORD WINAPI SyncState(LPVOID lp)
 				cews.bare = 1;
 				sendData(&cews, sizeof(cews));
 			}
-			Sleep(200);
+			//Sleep(1000);
 			RECT rc;
 			GetWindowRect((HWND)window->wid, &rc);
 			cip_event_window_configure_t cewc;
