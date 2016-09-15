@@ -12,6 +12,9 @@
 #include <stdint.h>
 #include <mutex>
 #include <ShlObj.h>
+#include <OleCtl.h>
+
+//#define DEV 1
 
 extern "C"
 {
@@ -280,8 +283,10 @@ int CreateUDPServer()
 			INPUT input;
 			input.type = INPUT_MOUSE;
 			input.mi.mouseData = 0;
-			input.mi.dx = cemm->x * (65536 / GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
-			input.mi.dy = cemm->y * (65536 / GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
+			int x = cemm->x + 1; //fix position
+			int y = cemm->y + 1; //fix position
+			input.mi.dx = 65535 * x / (GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
+			input.mi.dy = 65536 * y / (GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
 			input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
 			SendInput(1, &input, sizeof(input));
 			break;
@@ -511,23 +516,22 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	param.i_height = height;
 	param.i_slice_max_size = 65000;
 	param.i_threads = 0;
-	param.i_keyint_max = 30;
+	//param.i_keyint_max = 30;
 	
 
 	param.b_vfr_input = 0;
 	param.b_repeat_headers = 1;
 	param.b_annexb = 1;
-	param.rc.f_rf_constant = 28;
-	param.rc.f_rf_constant_max = 50;
+	param.rc.f_rf_constant = 25;
+	param.rc.f_rf_constant_max = 38;
 	param.rc.i_rc_method = X264_RC_CRF;
 	param.rc.i_vbv_max_bitrate = 1800;
 	param.rc.i_bitrate = 1500;
 	//param.b_intra_refresh = 1;
-	param.rc.i_qp_max = 40;
-	param.rc.i_qp_constant = 25;
-	/*param.i_fps_num = 10;
+	//param.rc.i_vbv_buffer_size = 3000;
+	param.i_fps_num = 10;
 	param.i_fps_den = 1;
-	param.i_timebase_num = 1;
+	/*param.i_timebase_num = 1;
 	param.i_timebase_den = 10;*/
 
 
@@ -777,12 +781,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_PULSARWINDOWS));
-
+#ifndef DEV
 	CreateThread(NULL, 0, ServerThread, NULL, 0, NULL);
 
 	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
 	//CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
-
+#endif
 	// begin dll injection
 	HINSTANCE hDll = LoadLibrary(TEXT("hook.dll"));
 	if (!hDll) {
@@ -798,10 +802,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		MessageBox(NULL, TEXT("dll inject fail"), TEXT("error"), MB_OK);
 		return 0;
 	}
-
+#ifndef DEV
 	CreateThread(NULL, 0, RunCloudware, NULL, 0, NULL);
 	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
-
+#endif
     MSG msg;
 
     // 主消息循环: 
@@ -945,6 +949,66 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			sendData(&cewc, sizeof(cewc));
 			windows[(int)msg.wParam]->x = rc.left;
 			windows[(int)msg.wParam]->y = rc.top;
+			break;
+		}
+		case WM_APP + 0x3FFF: { // cursor style change event
+
+			// Get information about the global cursor.
+			CURSORINFO ci;
+			ci.cbSize = sizeof(ci);
+			GetCursorInfo(&ci);
+			ICONINFO iconInfo;
+			GetIconInfo(ci.hCursor, &iconInfo);
+
+			PICTDESC pd;
+
+			pd.cbSizeofstruct = sizeof(PICTDESC);
+			pd.picType = PICTYPE_ICON;
+			pd.icon.hicon = ci.hCursor;
+			
+
+			LPPICTURE picture;
+			HRESULT res = OleCreatePictureIndirect(&pd, IID_IPicture, false,
+				reinterpret_cast<void**>(&picture));
+
+			if (!SUCCEEDED(res))
+				break;
+
+			LPSTREAM stream;
+			res = CreateStreamOnHGlobal(0, true, &stream);
+
+			if (!SUCCEEDED(res)) {
+				picture->Release();
+				break;
+			}
+
+			LONG bytes_streamed;
+			res = picture->SaveAsFile(stream, true, &bytes_streamed);
+
+
+			if (!SUCCEEDED(res)) {
+				stream->Release();
+				picture->Release();
+				return false;
+			}
+
+			HGLOBAL mem = 0;
+			GetHGlobalFromStream(stream, &mem);
+			LPVOID data = GlobalLock(mem);
+
+			char *payload = (char*)malloc(3 + bytes_streamed);
+			payload[0] = CIP_EVENT_CURSOR;
+			payload[1] = iconInfo.xHotspot;
+			payload[2] = iconInfo.yHotspot;
+			memcpy(&payload[3], data, bytes_streamed);
+			sendData(payload, 3 + bytes_streamed);
+			free(payload);
+
+			GlobalUnlock(mem);
+
+			stream->Release();
+			picture->Release();
+
 			break;
 		}
 		default:

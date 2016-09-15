@@ -56,7 +56,8 @@ enum CIP_EVENT {
 	CIP_EVENT_WINDOW_FRAME_UNLISTEN,
 	CIP_EVENT_WINDOW_SHOW_READY,
 	CIP_EVENT_WINDOW_FRAME,
-	CIP_EVENT_EXIT = 16
+	CIP_EVENT_EXIT = 16,
+	CIP_EVENT_CURSOR
 };
 typedef struct {
 	u8 type;
@@ -153,6 +154,9 @@ typedef struct {
 typedef struct {
 	u8 type;
 } cip_event_exit_t;
+typedef struct {
+	u8 type;
+} cip_event_cursor_t;
 typedef union {
 	u8 type;
 	cip_event_window_create_t window_create;
@@ -171,5 +175,6 @@ typedef union {
 	cip_event_window_frame_unlisten_t window_frame_unlisten;
 	cip_event_window_show_ready_t window_show_ready;
 	cip_event_exit_t exit;
+	cip_event_cursor_t cursor;
 } cip_event_t;
 #pragma pack()

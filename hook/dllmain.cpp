@@ -6,6 +6,7 @@
 HINSTANCE hInstance = NULL;
 HHOOK hHookCBT = NULL;
 HHOOK hHookCWPR = NULL;
+HWINEVENTHOOK hHookCursor = NULL;
 HWND hWndServer = NULL;
 #pragma data_seg()
 #pragma comment(linker, "/section:.shared,rws")
@@ -48,6 +49,19 @@ LRESULT CALLBACK HookCWPR(int nCode, WPARAM wParam, LPARAM lParam)
 	return CallNextHookEx(hHookCWPR, nCode, wParam, lParam);
 }
 
+void CALLBACK CursorEventProc(HWINEVENTHOOK hWinEventHook,
+	DWORD         event,
+	HWND          hwnd,
+	LONG          idObject,
+	LONG          idChild,
+	DWORD         dwEventThread,
+	DWORD         dwmsEventTime)
+{
+	if (idObject == OBJID_CURSOR) {
+		PostMessage(hWndServer, WM_APP + 0x3FFF, 0, 0);
+	}
+}
+
 extern "C" BOOL _declspec(dllexport) InstallHook(HWND hWnd, DWORD pid)
 {
 	hWndServer = hWnd;
@@ -59,11 +73,19 @@ extern "C" BOOL _declspec(dllexport) InstallHook(HWND hWnd, DWORD pid)
 	if (!hHookCBT) {
 		return false;
 	}
+
+	hHookCursor = SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, hInstance, CursorEventProc, pid, 0, WINEVENT_INCONTEXT);
+	if (!hHookCursor) {
+		return false;
+	}
 	return true;
 }
 
 extern "C" BOOL _declspec(dllexport) UninstallHook()
 {
 	hWndServer = NULL;
-	return UnhookWindowsHookEx(hHookCBT);
+	UnhookWindowsHookEx(hHookCBT);
+	UnhookWindowsHookEx(hHookCWPR);
+	UnhookWinEvent(hHookCursor);
+	return true;
 }
