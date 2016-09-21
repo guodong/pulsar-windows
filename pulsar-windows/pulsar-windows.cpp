@@ -1,6 +1,8 @@
 // pulsar-windows.cpp : 定义应用程序的入口点。
 //
 
+#define USE_OPENH264 1
+
 #include "stdafx.h"
 #include "pulsar-windows.h"
 #include <WinSock2.h>
@@ -8,11 +10,16 @@
 #include <map>
 #include "cip_window.h"
 #include "cip_protocol.h"
-#include <x264.h>
 #include <stdint.h>
 #include <mutex>
 #include <ShlObj.h>
 #include <OleCtl.h>
+
+
+#include <codec_api.h>
+
+//#include <x264.h>
+
 
 //#define DEV 1
 
@@ -498,7 +505,130 @@ RECT getDamageRect()
 	return rc;
 }
 
+DWORD WINAPI ScreenStreamThread264(LPVOID lp)
+{
+	HWND hDesktop = GetDesktopWindow();
+	RECT rc;
+	GetWindowRect(hDesktop, &rc);
+	int width = rc.right - rc.left;
+	int height = rc.bottom - rc.top;
+	toeven((size_t*)&width);
+	toeven((size_t*)&height);
+
+	ISVCEncoder *encoder;
+	int rv = WelsCreateSVCEncoder(&encoder);
+
+	SEncParamExt param;
+	encoder->GetDefaultParams(&param);
+	param.iUsageType = CAMERA_VIDEO_REAL_TIME;
+	param.fMaxFrameRate = 60;
+	param.iPicWidth = width;
+	param.iPicHeight = height;
+	param.iTargetBitrate = 5000000;
+	param.uiMaxNalSize = 65000;
+	param.iEntropyCodingModeFlag = 0;
+	param.bEnableDenoise = 0;
+	param.bPrefixNalAddingCtrl = false;
+	param.iSpatialLayerNum = 1;
+	param.uiIntraPeriod = 300;
+	param.bEnableAdaptiveQuant = 1;
+	param.iRCMode = RC_QUALITY_MODE;
+	param.iComplexityMode = LOW_COMPLEXITY;
+
+	for (int i = 0; i < param.iSpatialLayerNum; i++) {
+		param.sSpatialLayers[i].iVideoWidth = width >> (param.iSpatialLayerNum - 1 - i);
+		param.sSpatialLayers[i].iVideoHeight = height >> (param.iSpatialLayerNum - 1 - i);
+		param.sSpatialLayers[i].fFrameRate = 40;
+		param.sSpatialLayers[i].iSpatialBitrate = param.iTargetBitrate;
+		param.sSpatialLayers[i].sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE;
+		param.sSpatialLayers[i].sSliceArgument.uiSliceNum = 0;
+	}
+
+
+	encoder->InitializeExt(&param);
+
+	int videoFormat = videoFormatI420;
+	encoder->SetOption(ENCODER_OPTION_DATAFORMAT, &videoFormat);
+
+	SFrameBSInfo info;
+	memset(&info, 0, sizeof(SFrameBSInfo));
+	SSourcePicture pic;
+	memset(&pic, 0, sizeof(SSourcePicture));
+	pic.iPicWidth = width;
+	pic.iPicHeight = height;
+	pic.iColorFormat = videoFormatI420;
+	pic.iStride[0] = pic.iPicWidth;
+	pic.iStride[1] = pic.iStride[2] = pic.iPicWidth >> 1;
+	
+
+	HDC desktopDC = GetDC(NULL);
+	HDC memDC = CreateCompatibleDC(desktopDC);
+	HBITMAP hbmp = CreateCompatibleBitmap(desktopDC, width, height);
+	SelectObject(memDC, hbmp);
+	BYTE *data;
+	int size = 4 * width * height;
+	data = (BYTE*)malloc(size * 2);
+	memset(data, 0, size);
+	char *buf = (char*)malloc(70000);
+
+	SwsContext *ctx = sws_getContext(width, height, AV_PIX_FMT_RGB32, width, height, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
+	AVPicture pFrameYUV;
+
+	avpicture_fill(&pFrameYUV, &data[size], AV_PIX_FMT_YUV420P, width, height);
+	const int inLinesize[1] = { 4 * width };
+	
+	while (true) {
+		if (clients.empty()) {
+			Sleep(1000);
+			continue;
+		}
+		BitBlt(memDC, 0, 0, width, height, desktopDC, 0, 0, SRCCOPY);
+
+		BITMAPINFOHEADER bmi = { 0 };
+		bmi.biSize = sizeof(BITMAPINFOHEADER);
+		bmi.biPlanes = 1;
+		bmi.biBitCount = 32;
+		bmi.biWidth = width;
+		bmi.biHeight = -height;
+		bmi.biCompression = BI_RGB;
+
+		GetDIBits(memDC, hbmp, 0, height, data, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
+
+		sws_scale(ctx, (const uint8_t * const *)&data, inLinesize, 0, height, pFrameYUV.data, pFrameYUV.linesize);
+
+
+		pic.pData[0] = (unsigned char*)&data[size];
+		pic.pData[1] = pic.pData[0] + width * height;
+		pic.pData[2] = pic.pData[1] + (width * height >> 2);
+
+		rv = encoder->EncodeFrame(&pic, &info);
+		int layer, i;
+		if (info.eFrameType != videoFrameTypeSkip) {
+			for (layer = 0; layer < info.iLayerNum; layer++) {
+				int x = 0;
+				for (i = 0; i < info.sLayerInfo[layer].iNalCount; i++) {
+					int length = sizeof(cip_event_window_frame_ws_t) + info.sLayerInfo[layer].pNalLengthInByte[i];
+					cip_event_window_frame_ws_t *p = (cip_event_window_frame_ws_t*)buf;
+					p->type = CIP_EVENT_WINDOW_FRAME;
+					p->wid = 0;
+					memcpy(buf + sizeof(cip_event_window_frame_ws_t), &(info.sLayerInfo[layer].pBsBuf[x]), info.sLayerInfo[layer].pNalLengthInByte[i]);
+					sendData(buf, length);
+					x += info.sLayerInfo[layer].pNalLengthInByte[i];
+				}
+			}
+		}
+	}
+	sws_freeContext(ctx);
+	free(buf);
+	free(data);
+
+	return 0;
+}
+
+
+
 /* streaming screen image to h.264 stream */
+/*
 DWORD WINAPI ScreenStreamThread(LPVOID lp)
 {
 	HWND hDesktop = GetDesktopWindow();
@@ -517,22 +647,22 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	param.i_slice_max_size = 65000;
 	param.i_threads = 0;
 	//param.i_keyint_max = 30;
-	
+	//param.i_level_idc = 22;
 
 	param.b_vfr_input = 0;
 	param.b_repeat_headers = 1;
 	param.b_annexb = 1;
-	param.rc.f_rf_constant = 25;
-	param.rc.f_rf_constant_max = 38;
+	param.rc.f_rf_constant = 23;
+	param.rc.f_rf_constant_max = 32;
 	param.rc.i_rc_method = X264_RC_CRF;
-	param.rc.i_vbv_max_bitrate = 1800;
-	param.rc.i_bitrate = 1500;
+	//param.rc.i_vbv_max_bitrate = 2000;
+	//param.rc.i_bitrate = 1200;
 	//param.b_intra_refresh = 1;
-	//param.rc.i_vbv_buffer_size = 3000;
-	param.i_fps_num = 10;
-	param.i_fps_den = 1;
-	/*param.i_timebase_num = 1;
-	param.i_timebase_den = 10;*/
+	//param.rc.i_vbv_buffer_size = 10000;
+	//param.i_fps_num = 25;
+	//param.i_fps_den = 1;
+	//param.i_timebase_num = 1;
+	//param.i_timebase_den = 10;
 
 
 	if (x264_param_apply_profile(&param, "baseline") < 0) {
@@ -554,8 +684,10 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	HDC memDC = CreateCompatibleDC(desktopDC);
 	HBITMAP hbmp = CreateCompatibleBitmap(desktopDC, width, height);
 	SelectObject(memDC, hbmp);
-	BYTE *data;
-	data = (BYTE*)malloc(4 * width * height);
+	BYTE *data, *pointer;
+	int size = 4 * width * height;
+	data = (BYTE*)malloc(size * 2); //mutiply 2 by check image same
+	memset(data, 0, size * 2);
 	x264_nal_t *nal = NULL;
 	int32_t i_nal = 0;
 	x264_picture_t picout;
@@ -566,6 +698,8 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 
 	avpicture_fill(&pFrameYUV, pic.img.plane[0], AV_PIX_FMT_YUV420P, width, height);
 	const int inLinesize[1] = { 4 * width };
+
+	bool flag = true;
 	while (true) {
 		if (clients.empty()) {
 			Sleep(1000);
@@ -580,16 +714,20 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		bmi.biWidth = width;
 		bmi.biHeight = -height;
 		bmi.biCompression = BI_RGB;
+		if (flag) {
+			pointer = data;
+		} else {
+			pointer = &data[size];
+		}
 
-		GetDIBits(memDC, hbmp, 0, height, data, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
+		GetDIBits(memDC, hbmp, 0, height, pointer, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
 
-		sws_scale(ctx, (const uint8_t * const *)&data, inLinesize, 0, height, pFrameYUV.data, pFrameYUV.linesize);
 
-		/*ARGBToI420(data, width * 4,
-			pic.img.plane[0], width,
-			pic.img.plane[1], width / 2,
-			pic.img.plane[2], width / 2,
-			width, height);*/
+
+		//flag != flag;
+
+		//sws_scale(ctx, (const uint8_t * const *)&pointer, inLinesize, 0, height, pFrameYUV.data, pFrameYUV.linesize);
+
 
 		if (forceKeyFrame) {
 			pic.i_type = X264_TYPE_KEYFRAME;
@@ -602,7 +740,6 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		}
 		int i;
 		for (i = 0; i < i_nal; ++i) {
-			/* broadcast event */
 			int length = sizeof(cip_event_window_frame_ws_t) + nal[i].i_payload;
 			cip_event_window_frame_ws_t *p = (cip_event_window_frame_ws_t*)buf;
 			p->type = CIP_EVENT_WINDOW_FRAME;
@@ -612,7 +749,6 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		}
 		pic.i_pts++;
 		pic.i_type = X264_TYPE_AUTO;
-		//Sleep(50);
 	}
 	sws_freeContext(ctx);
 	free(buf);
@@ -622,6 +758,7 @@ fail2:
 	x264_picture_clean(&pic);
 	return 1;
 }
+*/
 
 DWORD WINAPI RunCloudware(LPVOID lp)
 {
@@ -685,7 +822,7 @@ err:
 DWORD WINAPI SyncState(LPVOID lp)
 {
 	while (true) {
-		Sleep(10000);
+		Sleep(4000);
 		std::map<int, cip_window_t*>::iterator it;
 		AcquireSRWLockShared(&windowsRWLock);
 		for (it = windows.begin(); it != windows.end(); it++) {
@@ -706,7 +843,7 @@ DWORD WINAPI SyncState(LPVOID lp)
 				cews.bare = 1;
 				sendData(&cews, sizeof(cews));
 			}
-			//Sleep(1000);
+			Sleep(100);
 			RECT rc;
 			GetWindowRect((HWND)window->wid, &rc);
 			cip_event_window_configure_t cewc;
@@ -781,12 +918,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_PULSARWINDOWS));
-#ifndef DEV
+
 	CreateThread(NULL, 0, ServerThread, NULL, 0, NULL);
 
-	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
+	CreateThread(NULL, 0, ScreenStreamThread264, NULL, 0, NULL);
 	//CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
-#endif
 	// begin dll injection
 	HINSTANCE hDll = LoadLibrary(TEXT("hook.dll"));
 	if (!hDll) {
@@ -813,7 +949,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     {
 		switch (msg.message) {
 		case WM_APP + HCBT_CREATEWND: {
-			Sleep(100);
+			Sleep(50);
 			HWND hwnd = (HWND)msg.wParam;
 			if (isTopWindow(hwnd)) {
 				RECT rc;
@@ -965,7 +1101,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			pd.cbSizeofstruct = sizeof(PICTDESC);
 			pd.picType = PICTYPE_ICON;
 			pd.icon.hicon = ci.hCursor;
-			
 
 			LPPICTURE picture;
 			HRESULT res = OleCreatePictureIndirect(&pd, IID_IPicture, false,
@@ -989,7 +1124,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			if (!SUCCEEDED(res)) {
 				stream->Release();
 				picture->Release();
-				return false;
+				break;
 			}
 
 			HGLOBAL mem = 0;

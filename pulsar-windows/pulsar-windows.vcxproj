@@ -76,9 +76,9 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\include;C:\x264;$(IncludePath)</IncludePath>
+    <IncludePath>C:\openh264-1.6.0\codec\api\svc;C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\include;C:\x264;$(IncludePath)</IncludePath>
     <ReferencePath>C:\x264-64;$(ReferencePath)</ReferencePath>
-    <LibraryPath>C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\lib;C:\x264-64;$(LibraryPath)</LibraryPath>
+    <LibraryPath>C:\openh264-1.6.0;C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\lib;C:\x264-64;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
@@ -113,8 +113,8 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\lib;C:\x264;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>libx264.lib;avcodec.lib;swscale.lib;avformat.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:\openh264-1.6.0;C:\ffmpeg-20160908-2793ebd-win64-dev\ffmpeg-20160908-2793ebd-win64-dev\lib;C:\x264;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>libx264.lib;avcodec.lib;swscale.lib;avformat.lib;openh264.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
