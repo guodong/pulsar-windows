@@ -1,7 +1,7 @@
 // pulsar-windows.cpp : 定义应用程序的入口点。
 //
 
-#define USE_OPENH264 1
+//#define USE_OPENH264 1
 
 #include "stdafx.h"
 #include "pulsar-windows.h"
@@ -15,11 +15,11 @@
 #include <ShlObj.h>
 #include <OleCtl.h>
 
-
+#ifdef USE_OPENH264
 #include <codec_api.h>
-
-//#include <x264.h>
-
+#else
+#include <x264.h>
+#endif
 
 //#define DEV 1
 
@@ -269,6 +269,10 @@ int CreateUDPServer()
 	WriteFile(fp, buf, strlen(buf), &written, NULL);
 	CloseHandle(fp);
 
+	HWND hDesktop = GetDesktopWindow();
+	RECT rc;
+	GetWindowRect(hDesktop, &rc);
+
 	sockaddr_in cliAddr;
 	int addrLen = sizeof(cliAddr);
 	while (true) {
@@ -285,13 +289,19 @@ int CreateUDPServer()
 		switch (data[0]) {
 		case CIP_EVENT_MOUSE_MOVE: {
 			cip_event_mouse_move_t *cemm = (cip_event_mouse_move_t*)data;
-			// do not use SetCursorPos, it will conflict with each user
+			// do not use SetCursorPosB, it will conflict with each user
 			// SetCursorPos(cemm->x, cemm->y);
 			INPUT input;
 			input.type = INPUT_MOUSE;
 			input.mi.mouseData = 0;
 			int x = cemm->x + 1; //fix position
 			int y = cemm->y + 1; //fix position
+			if (x > (rc.right - rc.left - 5)) {
+				x = rc.right - rc.left - 5;
+			}
+			if (y > (rc.bottom - rc.top - 41)) {
+				y = rc.bottom - rc.top - 41;
+			}
 			input.mi.dx = 65535 * x / (GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
 			input.mi.dy = 65536 * y / (GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
 			input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
@@ -504,14 +514,14 @@ RECT getDamageRect()
 	}
 	return rc;
 }
-
-DWORD WINAPI ScreenStreamThread264(LPVOID lp)
+#ifdef USE_OPENH264
+DWORD WINAPI ScreenStreamThread(LPVOID lp)
 {
 	HWND hDesktop = GetDesktopWindow();
 	RECT rc;
 	GetWindowRect(hDesktop, &rc);
 	int width = rc.right - rc.left;
-	int height = rc.bottom - rc.top;
+	int height = rc.bottom - rc.top - 40; // minus taskbar height
 	toeven((size_t*)&width);
 	toeven((size_t*)&height);
 
@@ -520,19 +530,19 @@ DWORD WINAPI ScreenStreamThread264(LPVOID lp)
 
 	SEncParamExt param;
 	encoder->GetDefaultParams(&param);
-	param.iUsageType = CAMERA_VIDEO_REAL_TIME;
+	param.iUsageType = SCREEN_CONTENT_REAL_TIME;
 	param.fMaxFrameRate = 60;
 	param.iPicWidth = width;
 	param.iPicHeight = height;
-	param.iTargetBitrate = 5000000;
+	param.iTargetBitrate = 50000;
 	param.uiMaxNalSize = 65000;
 	param.iEntropyCodingModeFlag = 0;
 	param.bEnableDenoise = 0;
 	param.bPrefixNalAddingCtrl = false;
 	param.iSpatialLayerNum = 1;
-	param.uiIntraPeriod = 300;
+	param.uiIntraPeriod = 250;
 	param.bEnableAdaptiveQuant = 1;
-	param.iRCMode = RC_QUALITY_MODE;
+	param.iRCMode = RC_BITRATE_MODE;
 	param.iComplexityMode = LOW_COMPLEXITY;
 
 	for (int i = 0; i < param.iSpatialLayerNum; i++) {
@@ -549,6 +559,8 @@ DWORD WINAPI ScreenStreamThread264(LPVOID lp)
 
 	int videoFormat = videoFormatI420;
 	encoder->SetOption(ENCODER_OPTION_DATAFORMAT, &videoFormat);
+	int maxFrameRate = 60;
+	encoder->SetOption(ENCODER_OPTION_FRAME_RATE, &maxFrameRate);
 
 	SFrameBSInfo info;
 	memset(&info, 0, sizeof(SFrameBSInfo));
@@ -617,6 +629,7 @@ DWORD WINAPI ScreenStreamThread264(LPVOID lp)
 				}
 			}
 		}
+		
 	}
 	sws_freeContext(ctx);
 	free(buf);
@@ -625,10 +638,10 @@ DWORD WINAPI ScreenStreamThread264(LPVOID lp)
 	return 0;
 }
 
-
+#else
 
 /* streaming screen image to h.264 stream */
-/*
+
 DWORD WINAPI ScreenStreamThread(LPVOID lp)
 {
 	HWND hDesktop = GetDesktopWindow();
@@ -647,22 +660,22 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	param.i_slice_max_size = 65000;
 	param.i_threads = 0;
 	//param.i_keyint_max = 30;
-	//param.i_level_idc = 22;
+
 
 	param.b_vfr_input = 0;
 	param.b_repeat_headers = 1;
 	param.b_annexb = 1;
-	param.rc.f_rf_constant = 23;
-	param.rc.f_rf_constant_max = 32;
+	param.rc.f_rf_constant = 25;
+	param.rc.f_rf_constant_max = 38;
 	param.rc.i_rc_method = X264_RC_CRF;
-	//param.rc.i_vbv_max_bitrate = 2000;
-	//param.rc.i_bitrate = 1200;
+	param.rc.i_vbv_max_bitrate = 1800;
+	param.rc.i_bitrate = 1500;
 	//param.b_intra_refresh = 1;
-	//param.rc.i_vbv_buffer_size = 10000;
-	//param.i_fps_num = 25;
-	//param.i_fps_den = 1;
-	//param.i_timebase_num = 1;
-	//param.i_timebase_den = 10;
+	//param.rc.i_vbv_buffer_size = 3000;
+	param.i_fps_num = 10;
+	param.i_fps_den = 1;
+	/*param.i_timebase_num = 1;
+	param.i_timebase_den = 10;*/
 
 
 	if (x264_param_apply_profile(&param, "baseline") < 0) {
@@ -684,10 +697,8 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	HDC memDC = CreateCompatibleDC(desktopDC);
 	HBITMAP hbmp = CreateCompatibleBitmap(desktopDC, width, height);
 	SelectObject(memDC, hbmp);
-	BYTE *data, *pointer;
-	int size = 4 * width * height;
-	data = (BYTE*)malloc(size * 2); //mutiply 2 by check image same
-	memset(data, 0, size * 2);
+	BYTE *data;
+	data = (BYTE*)malloc(4 * width * height);
 	x264_nal_t *nal = NULL;
 	int32_t i_nal = 0;
 	x264_picture_t picout;
@@ -698,8 +709,6 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 
 	avpicture_fill(&pFrameYUV, pic.img.plane[0], AV_PIX_FMT_YUV420P, width, height);
 	const int inLinesize[1] = { 4 * width };
-
-	bool flag = true;
 	while (true) {
 		if (clients.empty()) {
 			Sleep(1000);
@@ -714,20 +723,16 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		bmi.biWidth = width;
 		bmi.biHeight = -height;
 		bmi.biCompression = BI_RGB;
-		if (flag) {
-			pointer = data;
-		} else {
-			pointer = &data[size];
-		}
 
-		GetDIBits(memDC, hbmp, 0, height, pointer, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
+		GetDIBits(memDC, hbmp, 0, height, data, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
 
+		sws_scale(ctx, (const uint8_t * const *)&data, inLinesize, 0, height, pFrameYUV.data, pFrameYUV.linesize);
 
-
-		//flag != flag;
-
-		//sws_scale(ctx, (const uint8_t * const *)&pointer, inLinesize, 0, height, pFrameYUV.data, pFrameYUV.linesize);
-
+		/*ARGBToI420(data, width * 4,
+		pic.img.plane[0], width,
+		pic.img.plane[1], width / 2,
+		pic.img.plane[2], width / 2,
+		width, height);*/
 
 		if (forceKeyFrame) {
 			pic.i_type = X264_TYPE_KEYFRAME;
@@ -740,6 +745,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		}
 		int i;
 		for (i = 0; i < i_nal; ++i) {
+			/* broadcast event */
 			int length = sizeof(cip_event_window_frame_ws_t) + nal[i].i_payload;
 			cip_event_window_frame_ws_t *p = (cip_event_window_frame_ws_t*)buf;
 			p->type = CIP_EVENT_WINDOW_FRAME;
@@ -749,6 +755,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		}
 		pic.i_pts++;
 		pic.i_type = X264_TYPE_AUTO;
+		//Sleep(50);
 	}
 	sws_freeContext(ctx);
 	free(buf);
@@ -758,7 +765,7 @@ fail2:
 	x264_picture_clean(&pic);
 	return 1;
 }
-*/
+#endif
 
 DWORD WINAPI RunCloudware(LPVOID lp)
 {
@@ -770,37 +777,20 @@ DWORD WINAPI RunCloudware(LPVOID lp)
 	si.cb = sizeof(si);
 	ZeroMemory(&pi, sizeof(pi));
 
-	if (_tcscmp(szCmdline, _T("iexplore")) == 0) {
-		WCHAR cmd[] = _T("c:\\Program Files\\Internet Explorer\\iexplore.exe");
-		if (!CreateProcess(NULL,   // No module name (use command line)
-			cmd,        // Command line
-			NULL,           // Process handle not inheritable
-			NULL,           // Thread handle not inheritable
-			FALSE,          // Set handle inheritance to FALSE
-			0,              // No creation flags
-			NULL,           // Use parent's environment block
-			NULL,           // Use parent's starting directory 
-			&si,            // Pointer to STARTUPINFO structure
-			&pi)) {
-			goto err;
-		}
-	} else {
-		// Start the child process. 
-		if (!CreateProcess(NULL,   // No module name (use command line)
-			szCmdline,        // Command line
-			NULL,           // Process handle not inheritable
-			NULL,           // Thread handle not inheritable
-			FALSE,          // Set handle inheritance to FALSE
-			0,              // No creation flags
-			NULL,           // Use parent's environment block
-			NULL,           // Use parent's starting directory 
-			&si,            // Pointer to STARTUPINFO structure
-			&pi)           // Pointer to PROCESS_INFORMATION structure
-			) {
-			goto err;
-		}
+	// Start the child process. 
+	if (!CreateProcess(NULL,   // No module name (use command line)
+		szCmdline,        // Command line
+		NULL,           // Process handle not inheritable
+		NULL,           // Thread handle not inheritable
+		FALSE,          // Set handle inheritance to FALSE
+		0,              // No creation flags
+		NULL,           // Use parent's environment block
+		NULL,           // Use parent's starting directory 
+		&si,            // Pointer to STARTUPINFO structure
+		&pi)           // Pointer to PROCESS_INFORMATION structure
+		) {
+		goto err;
 	}
-
 	WaitForSingleObject(pi.hProcess, INFINITE);
 
 err:
@@ -921,8 +911,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	CreateThread(NULL, 0, ServerThread, NULL, 0, NULL);
 
-	CreateThread(NULL, 0, ScreenStreamThread264, NULL, 0, NULL);
-	//CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
+	//CreateThread(NULL, 0, ScreenStreamThread264, NULL, 0, NULL);
+	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
 	// begin dll injection
 	HINSTANCE hDll = LoadLibrary(TEXT("hook.dll"));
 	if (!hDll) {
@@ -1001,7 +991,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			break;
 		}
 		case WM_APP + 0x4000 + WM_SHOWWINDOW: {
-			
 			HWND hwnd = (HWND)msg.wParam;
 			AcquireSRWLockShared(&windowsRWLock);
 			if (windows.find((int)msg.wParam) == windows.end()) {
@@ -1010,7 +999,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			}
 			ReleaseSRWLockShared(&windowsRWLock);
 			cip_window_t *window = windows[(int)hwnd];
-			BOOL visible = msg.lParam;// IsWindowVisible(hwnd);
+			BOOL visible = msg.lParam;
 			window->visible = visible;
 			if (visible) {
 				cip_event_window_show_t cews;
@@ -1066,7 +1055,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				break;
 			}
 			ReleaseSRWLockShared(&windowsRWLock);
-			//Sleep(20);
+			Sleep(20);
 			cip_window_t *window = windows[(int)hwnd];
 			RECT rc;
 			GetWindowRect(hwnd, &rc);
