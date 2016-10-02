@@ -785,7 +785,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	CreateThread(NULL, 0, ServerThread, NULL, 0, NULL);
 
 	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
-	//CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
 #endif
 	// begin dll injection
 	HINSTANCE hDll = LoadLibrary(TEXT("hook.dll"));
