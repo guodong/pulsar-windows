@@ -1,7 +1,7 @@
 // pulsar-windows.cpp : 定义应用程序的入口点。
 //
 
-//#define USE_OPENH264 1
+#define USE_OPENH264 1
 
 #include "stdafx.h"
 #include "pulsar-windows.h"
@@ -14,12 +14,12 @@
 #include <mutex>
 #include <ShlObj.h>
 #include <OleCtl.h>
+#include <shellapi.h>
 
-#ifdef USE_OPENH264
 #include <codec_api.h>
-#else
-#include <x264.h>
-#endif
+#include <winhttp.h>
+
+#pragma comment(lib, "winhttp")
 
 //#define DEV 1
 
@@ -45,14 +45,17 @@ WCHAR szWindowClass[MAX_LOADSTRING];            // 主窗口类名
 HWND hWndServer;								// 接受hook消息的主窗口句柄
 typedef std::list<sockaddr_in> CLIENTS;
 CLIENTS clients;
+sockaddr_in sinaddr;
 
 SRWLOCK windowsRWLock;
 std::map<int, cip_window_t*> windows;
 SOCKET serSocket;
+SOCKET cliSocket;
 std::mutex sendLock;
 BOOL forceKeyFrame = false;
 std::map<uint8_t, uint8_t> keymap;
-LPTSTR szCmdline = _tcsdup(TEXT("C:\\Windows\\Notepad.exe"));
+LPTSTR szCmdline = _tcsdup(TEXT("C:\\Windows\\system32\\notepad.exe"));
+LPWSTR token;
 int udp_port = 0; //udp server port
 
 
@@ -191,6 +194,23 @@ BOOL isTopWindow(HWND hwnd)
 	return (parent == GetDesktopWindow());
 }
 
+void changeResolution(int width, int height)
+{
+	DISPLAY_DEVICE dd;
+	dd.cb = sizeof(DISPLAY_DEVICE);
+	DEVMODE mode;
+	memset(&mode, 0, sizeof(DEVMODE));
+	mode.dmSize = sizeof(DEVMODE);
+	mode.dmPelsWidth = width;
+	mode.dmPelsHeight = height;
+	mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+	DWORD devNum = 0;
+	while (EnumDisplayDevices(NULL, devNum, &dd, 0)) {
+		ChangeDisplaySettingsEx(dd.DeviceName, &mode, NULL, CDS_UPDATEREGISTRY | CDS_GLOBAL, NULL);
+		devNum++;
+	}
+}
+
 void recover(sockaddr_in client)
 {
 	std::map<int, cip_window_t*>::iterator it;
@@ -215,6 +235,142 @@ void recover(sockaddr_in client)
 			sendData(&cews, sizeof(cews));
 		}
 	}
+}
+
+int CreateUDPClient()
+{
+	WSADATA wsaData;
+	int iResult;
+
+	// Initialize Winsock
+	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+	if (iResult != 0) {
+		return 1;
+	}
+
+	cliSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	sinaddr.sin_family = AF_INET;
+	sinaddr.sin_port = htons(9000);
+	sinaddr.sin_addr.S_un.S_addr = inet_addr("10.10.219.132");
+
+	int len = sizeof(sinaddr);
+
+	// send token to gateway
+	/*wchar_t username[100];
+	DWORD namesize = 100;
+	GetUserName(username, &namesize);*/
+	char str[100];
+	memset(str, 0, 100);
+	wcstombs(str, token, 100);
+	sendLock.lock();
+	sendto(cliSocket, str, 100, 0, (sockaddr*)&sinaddr, len);
+	sendLock.unlock();
+	HWND hDesktop = GetDesktopWindow();
+	RECT rc;
+	GetWindowRect(hDesktop, &rc);
+	while (true) {
+		char data[255];
+		memset(data, 0, 255);
+		int recvlen = recvfrom(cliSocket, data, 255, 0, (sockaddr*)&sinaddr, &len);
+		int err = WSAGetLastError();
+		if (recvlen <= 0) {
+			continue;
+		}
+		switch (data[0]) {
+		case CIP_EVENT_MOUSE_MOVE: {
+			cip_event_mouse_move_t *cemm = (cip_event_mouse_move_t*)data;
+			// do not use SetCursorPosB, it will conflict with each user
+			// SetCursorPos(cemm->x, cemm->y);
+			INPUT input;
+			input.type = INPUT_MOUSE;
+			input.mi.mouseData = 0;
+			int x = cemm->x; //fix position
+			int y = cemm->y; //fix position
+			/*if (x > (rc.right - rc.left - 5)) {
+				x = rc.right - rc.left - 5;
+			}
+			if (y > (rc.bottom - rc.top - 41)) {
+				y = rc.bottom - rc.top - 41;
+			}*/
+			input.mi.dx = 65535 * x / (GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
+			input.mi.dy = 65536 * y / (GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
+			input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
+			SendInput(1, &input, sizeof(input));
+			break;
+		}
+		case CIP_EVENT_MOUSE_DOWN: {
+			cip_event_mouse_down_t *cemd = (cip_event_mouse_down_t*)data;
+			INPUT input;
+			input.type = INPUT_MOUSE;
+			if (cemd->code == 1) {
+				input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+			} else if (cemd->code == 3) {
+				input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
+			}
+			SendInput(1, &input, sizeof(input));
+			break;
+		}
+		case CIP_EVENT_MOUSE_UP: {
+			cip_event_mouse_up_t *cemd = (cip_event_mouse_up_t*)data;
+			INPUT input;
+			input.type = INPUT_MOUSE;
+			if (cemd->code == 1) {
+				input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+			} else if (cemd->code == 3) {
+				input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
+			}
+			SendInput(1, &input, sizeof(input));
+			break;
+		}
+		case CIP_EVENT_KEY_DOWN: {
+			cip_event_key_down_t *cekd = (cip_event_key_down_t*)data;
+			INPUT input;
+			input.type = INPUT_KEYBOARD;
+			input.ki.time = 0;
+			input.ki.wVk = keymap[cekd->code];
+			input.ki.dwExtraInfo = 0;
+			input.ki.dwFlags = 0;
+			input.ki.wScan = 0;
+			SendInput(1, &input, sizeof(input));
+			break;
+		}
+		case CIP_EVENT_KEY_UP: {
+			cip_event_key_up_t *ceku = (cip_event_key_up_t*)data;
+			INPUT input;
+			input.type = INPUT_KEYBOARD;
+			input.ki.time = 0;
+			input.ki.wVk = keymap[ceku->code];
+			input.ki.dwExtraInfo = 0;
+			input.ki.dwFlags = KEYEVENTF_KEYUP;
+			input.ki.wScan = 0;
+			SendInput(1, &input, sizeof(input));
+			break;
+		}
+		default:
+			break;
+		}
+	}
+	closesocket(cliSocket);
+	WSACleanup();
+	return 0;
+}
+
+DWORD WINAPI TickInfo(LPVOID lp)
+{
+	wchar_t username[100];
+	DWORD namesize = 100;
+	GetUserName(username, &namesize);
+	char str[100];
+	memset(str, 0, 100);
+	wcstombs(str, username, 100);
+	while (true) {
+		Sleep(2000);
+		sendLock.lock();
+		sendto(cliSocket, str, 100, 0, (sockaddr*)&sinaddr, sizeof(sinaddr));
+		sendLock.unlock();
+	}
+	
+	return 0;
 }
 
 int CreateUDPServer()
@@ -365,7 +521,8 @@ int CreateUDPServer()
 
 DWORD WINAPI ServerThread(LPVOID lp)
 {
-	CreateUDPServer();
+	//CreateUDPServer();
+	CreateUDPClient();
 	return 0;
 }
 
@@ -514,14 +671,14 @@ RECT getDamageRect()
 	}
 	return rc;
 }
-#ifdef USE_OPENH264
+
 DWORD WINAPI ScreenStreamThread(LPVOID lp)
 {
 	HWND hDesktop = GetDesktopWindow();
 	RECT rc;
 	GetWindowRect(hDesktop, &rc);
 	int width = rc.right - rc.left;
-	int height = rc.bottom - rc.top - 40; // minus taskbar height
+	int height = rc.bottom - rc.top;
 	toeven((size_t*)&width);
 	toeven((size_t*)&height);
 
@@ -530,37 +687,38 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 
 	SEncParamExt param;
 	encoder->GetDefaultParams(&param);
-	param.iUsageType = SCREEN_CONTENT_REAL_TIME;
-	param.fMaxFrameRate = 60;
+	param.iUsageType = CAMERA_VIDEO_REAL_TIME;
+	param.fMaxFrameRate = 30;
 	param.iPicWidth = width;
 	param.iPicHeight = height;
-	param.iTargetBitrate = 50000;
+	param.iTargetBitrate = 3200000;
 	param.uiMaxNalSize = 65000;
 	param.iEntropyCodingModeFlag = 0;
 	param.bEnableDenoise = 0;
 	param.bPrefixNalAddingCtrl = false;
+	param.iTemporalLayerNum = 1;
 	param.iSpatialLayerNum = 1;
-	param.uiIntraPeriod = 250;
+	param.uiIntraPeriod = 50;
 	param.bEnableAdaptiveQuant = 1;
-	param.iRCMode = RC_BITRATE_MODE;
+	param.bEnableBackgroundDetection = 1;
+	param.bEnableFrameSkip = 0;
+	param.bEnableLongTermReference = 0;
+	param.iLtrMarkPeriod = 30;
+	param.iRCMode = RC_QUALITY_MODE;
 	param.iComplexityMode = LOW_COMPLEXITY;
 
 	for (int i = 0; i < param.iSpatialLayerNum; i++) {
 		param.sSpatialLayers[i].iVideoWidth = width >> (param.iSpatialLayerNum - 1 - i);
 		param.sSpatialLayers[i].iVideoHeight = height >> (param.iSpatialLayerNum - 1 - i);
-		param.sSpatialLayers[i].fFrameRate = 40;
+		param.sSpatialLayers[i].fFrameRate = 30;
 		param.sSpatialLayers[i].iSpatialBitrate = param.iTargetBitrate;
-		param.sSpatialLayers[i].sSliceArgument.uiSliceMode = SM_FIXEDSLCNUM_SLICE;
+		param.sSpatialLayers[i].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
 		param.sSpatialLayers[i].sSliceArgument.uiSliceNum = 0;
 	}
 
 
 	encoder->InitializeExt(&param);
 
-	int videoFormat = videoFormatI420;
-	encoder->SetOption(ENCODER_OPTION_DATAFORMAT, &videoFormat);
-	int maxFrameRate = 60;
-	encoder->SetOption(ENCODER_OPTION_FRAME_RATE, &maxFrameRate);
 
 	SFrameBSInfo info;
 	memset(&info, 0, sizeof(SFrameBSInfo));
@@ -577,12 +735,15 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	HDC memDC = CreateCompatibleDC(desktopDC);
 	HBITMAP hbmp = CreateCompatibleBitmap(desktopDC, width, height);
 	SelectObject(memDC, hbmp);
-	BYTE *data;
+
+	BYTE *data, *yuvData;
 	int size = 4 * width * height;
 	data = (BYTE*)malloc(size * 2);
+	//yuvData = (BYTE*)malloc(size);
 	memset(data, 0, size);
+	//memset(yuvData, 0, size);
 	char *buf = (char*)malloc(70000);
-
+	
 	SwsContext *ctx = sws_getContext(width, height, AV_PIX_FMT_RGB32, width, height, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
 	AVPicture pFrameYUV;
 
@@ -590,10 +751,10 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	const int inLinesize[1] = { 4 * width };
 	
 	while (true) {
-		if (clients.empty()) {
+		/*if (clients.empty()) {
 			Sleep(1000);
 			continue;
-		}
+		}*/
 		BitBlt(memDC, 0, 0, width, height, desktopDC, 0, 0, SRCCOPY);
 
 		BITMAPINFOHEADER bmi = { 0 };
@@ -638,138 +799,10 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	return 0;
 }
 
-#else
-
-/* streaming screen image to h.264 stream */
-
-DWORD WINAPI ScreenStreamThread(LPVOID lp)
-{
-	HWND hDesktop = GetDesktopWindow();
-	RECT rc;
-	GetWindowRect(hDesktop, &rc);
-	int width = rc.right - rc.left;
-	int height = rc.bottom - rc.top;
-	toeven((size_t*)&width);
-	toeven((size_t*)&height);
-
-	x264_param_t param;
-	x264_param_default_preset(&param, "slow", "zerolatency");
-	param.i_csp = X264_CSP_I420;
-	param.i_width = width;
-	param.i_height = height;
-	param.i_slice_max_size = 65000;
-	param.i_threads = 0;
-	//param.i_keyint_max = 30;
-
-
-	param.b_vfr_input = 0;
-	param.b_repeat_headers = 1;
-	param.b_annexb = 1;
-	param.rc.f_rf_constant = 25;
-	param.rc.f_rf_constant_max = 38;
-	param.rc.i_rc_method = X264_RC_CRF;
-	param.rc.i_vbv_max_bitrate = 1800;
-	param.rc.i_bitrate = 1500;
-	//param.b_intra_refresh = 1;
-	//param.rc.i_vbv_buffer_size = 3000;
-	param.i_fps_num = 10;
-	param.i_fps_den = 1;
-	/*param.i_timebase_num = 1;
-	param.i_timebase_den = 10;*/
-
-
-	if (x264_param_apply_profile(&param, "baseline") < 0) {
-		return 1;
-	}
-
-	x264_picture_t pic;
-	if (x264_picture_alloc(&pic, param.i_csp, param.i_width, param.i_height) < 0) {
-		return 1;
-	}
-	pic.i_pts = 0;
-
-	x264_t *encoder = x264_encoder_open(&param);
-	if (!encoder) {
-		goto fail2;
-	}
-
-	HDC desktopDC = GetDC(NULL);
-	HDC memDC = CreateCompatibleDC(desktopDC);
-	HBITMAP hbmp = CreateCompatibleBitmap(desktopDC, width, height);
-	SelectObject(memDC, hbmp);
-	BYTE *data;
-	data = (BYTE*)malloc(4 * width * height);
-	x264_nal_t *nal = NULL;
-	int32_t i_nal = 0;
-	x264_picture_t picout;
-	char *buf = (char*)malloc(70000);
-
-	SwsContext *ctx = sws_getContext(width, height, AV_PIX_FMT_RGB32, width, height, AV_PIX_FMT_YUV420P, 0, 0, 0, 0);
-	AVPicture pFrameYUV, pFrameRGB;
-
-	avpicture_fill(&pFrameYUV, pic.img.plane[0], AV_PIX_FMT_YUV420P, width, height);
-	const int inLinesize[1] = { 4 * width };
-	while (true) {
-		if (clients.empty()) {
-			Sleep(1000);
-			continue;
-		}
-		BitBlt(memDC, 0, 0, width, height, desktopDC, 0, 0, SRCCOPY);
-
-		BITMAPINFOHEADER bmi = { 0 };
-		bmi.biSize = sizeof(BITMAPINFOHEADER);
-		bmi.biPlanes = 1;
-		bmi.biBitCount = 32;
-		bmi.biWidth = width;
-		bmi.biHeight = -height;
-		bmi.biCompression = BI_RGB;
-
-		GetDIBits(memDC, hbmp, 0, height, data, (BITMAPINFO*)&bmi, DIB_RGB_COLORS);
-
-		sws_scale(ctx, (const uint8_t * const *)&data, inLinesize, 0, height, pFrameYUV.data, pFrameYUV.linesize);
-
-		/*ARGBToI420(data, width * 4,
-		pic.img.plane[0], width,
-		pic.img.plane[1], width / 2,
-		pic.img.plane[2], width / 2,
-		width, height);*/
-
-		if (forceKeyFrame) {
-			pic.i_type = X264_TYPE_KEYFRAME;
-		}
-
-
-		int i_frame_size = x264_encoder_encode(encoder, &nal, &i_nal, &pic, &picout);
-		if (i_frame_size < 0) {
-			return 1;
-		}
-		int i;
-		for (i = 0; i < i_nal; ++i) {
-			/* broadcast event */
-			int length = sizeof(cip_event_window_frame_ws_t) + nal[i].i_payload;
-			cip_event_window_frame_ws_t *p = (cip_event_window_frame_ws_t*)buf;
-			p->type = CIP_EVENT_WINDOW_FRAME;
-			p->wid = 0;
-			memcpy(buf + sizeof(cip_event_window_frame_ws_t), nal[i].p_payload, nal[i].i_payload);
-			sendData(buf, length);
-		}
-		pic.i_pts++;
-		pic.i_type = X264_TYPE_AUTO;
-		//Sleep(50);
-	}
-	sws_freeContext(ctx);
-	free(buf);
-	free(data);
-	return 0;
-fail2:
-	x264_picture_clean(&pic);
-	return 1;
-}
-#endif
 
 DWORD WINAPI RunCloudware(LPVOID lp)
 {
-	Sleep(1000); // wait for main window show
+	//Sleep(3000); // wait for main window show
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
 
@@ -812,7 +845,7 @@ err:
 DWORD WINAPI SyncState(LPVOID lp)
 {
 	while (true) {
-		Sleep(4000);
+		Sleep(2000);
 		std::map<int, cip_window_t*>::iterator it;
 		AcquireSRWLockShared(&windowsRWLock);
 		for (it = windows.begin(); it != windows.end(); it++) {
@@ -855,10 +888,11 @@ DWORD WINAPI SyncState(LPVOID lp)
 void sendData(void *payload, int length)
 {
 	sendLock.lock();
-	CLIENTS::iterator i;
+	sendto(cliSocket, (char*)payload, length, 0, (sockaddr*)&sinaddr, sizeof(sockaddr_in));
+	/*CLIENTS::iterator i;
 	for (i = clients.begin(); i != clients.end(); i++) {
 		sendto(serSocket, (char*)payload, length, 0, (sockaddr*)&(*i), sizeof(sockaddr_in));
-	}
+	}*/
 	sendLock.unlock();
 }
 
@@ -890,9 +924,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	if (FileExists(filepath)) {
 		return 0;
 	}
-	if (_tcscmp(lpCmdLine, _T("")) != 0) {
-		szCmdline = lpCmdLine;
+
+	int nArgs;
+	LPWSTR *szArglist;
+	szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
+
+	if (_tcscmp(szArglist[1], _T("")) != 0) {
+		szCmdline = szArglist[1];
 	}
+
+	token = szArglist[2];
+	OutputDebugString(token);
 
 	InitKeymap();
 
@@ -911,8 +953,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	CreateThread(NULL, 0, ServerThread, NULL, 0, NULL);
 
-	//CreateThread(NULL, 0, ScreenStreamThread264, NULL, 0, NULL);
-	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
+#ifndef DEV
+	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
+#endif
+	CreateThread(NULL, 0, TickInfo, NULL, 0, NULL);
+	//ScreenStreamThread(NULL);
 	// begin dll injection
 	HINSTANCE hDll = LoadLibrary(TEXT("hook.dll"));
 	if (!hDll) {
@@ -928,6 +973,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		MessageBox(NULL, TEXT("dll inject fail"), TEXT("error"), MB_OK);
 		return 0;
 	}
+	changeResolution(500, 500);
 #ifndef DEV
 	CreateThread(NULL, 0, RunCloudware, NULL, 0, NULL);
 	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
