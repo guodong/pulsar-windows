@@ -35,7 +35,7 @@ namespace loader
 
             string token_path = @"\\cwstorage1\tmp$\" + Environment.UserName + @"_token";
             string token = File.ReadAllText(token_path);
-            Process.Start("C:\\pulsar-windows\\pulsar-windows.exe", cmd + " " + token);
+            Process.Start("C:\\pulsar-windows\\pulsar-windows.exe", "\"" + cmd + "\" " + token);
             Environment.Exit(1);
         }
     }

@@ -357,12 +357,12 @@ int CreateUDPClient()
 
 DWORD WINAPI TickInfo(LPVOID lp)
 {
-	wchar_t username[100];
+	/*wchar_t username[100];
 	DWORD namesize = 100;
-	GetUserName(username, &namesize);
+	GetUserName(username, &namesize);*/
 	char str[100];
 	memset(str, 0, 100);
-	wcstombs(str, username, 100);
+	wcstombs(str, token, 100);
 	while (true) {
 		Sleep(2000);
 		sendLock.lock();
@@ -833,10 +833,10 @@ err:
 	cip_event_exit_t ext;
 	ext.type = CIP_EVENT_EXIT;
 	sendData(&ext, sizeof(ext));
-
+#ifndef DEV
 	/* logout user */
 	ExitWindowsEx(EWX_LOGOFF, SHTDN_REASON_FLAG_PLANNED);
-
+#endif
 	/* TODO: clean memory and exit*/
 	exit(0);
 }
@@ -973,11 +973,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		MessageBox(NULL, TEXT("dll inject fail"), TEXT("error"), MB_OK);
 		return 0;
 	}
-	changeResolution(500, 500);
-#ifndef DEV
+	//changeResolution(500, 500);
+
 	CreateThread(NULL, 0, RunCloudware, NULL, 0, NULL);
 	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
-#endif
+
     MSG msg;
 
     // 主消息循环: 
