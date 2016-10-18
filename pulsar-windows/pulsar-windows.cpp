@@ -210,31 +210,6 @@ int CreateUDPClient()
 	return 0;
 }
 
-DWORD WINAPI TickInfo(LPVOID lp)
-{
-	/*wchar_t username[100];
-	DWORD namesize = 100;
-	GetUserName(username, &namesize);*/
-	char str[100];
-	memset(str, 0, 100);
-	wcstombs(str, token, 100);
-	while (true) {
-		Sleep(2000);
-		sendLock.lock();
-		sendto(cliSocket, str, 100, 0, (sockaddr*)&sinaddr, sizeof(sinaddr));
-		sendLock.unlock();
-	}
-	
-	return 0;
-}
-
-DWORD WINAPI ServerThread(LPVOID lp)
-{
-	//CreateUDPServer();
-	//CreateUDPClient();
-	return 0;
-}
-
 void toeven(size_t *num)
 {
 	if (*num % 4) {
@@ -269,9 +244,8 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	param.iTemporalLayerNum = 1;
 	param.iSpatialLayerNum = 1;
 	param.uiIntraPeriod = 250;
-	param.bEnableAdaptiveQuant = 1;
 	param.bEnableBackgroundDetection = 1;
-	param.bEnableFrameSkip = 0;
+	param.bEnableFrameSkip = 1;
 	param.bEnableLongTermReference = 0;
 	param.iRCMode = RC_QUALITY_MODE;
 	param.iComplexityMode = LOW_COMPLEXITY;
@@ -541,8 +515,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_PULSARWINDOWS));
-
-	CreateThread(NULL, 0, ServerThread, NULL, 0, NULL);
 
 #ifndef DEV
 	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
