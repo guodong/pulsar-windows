@@ -39,6 +39,9 @@
     <ClInclude Include="cip_protocol.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="keymap.h">
+      <Filter>源文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
@@ -63,5 +66,8 @@
     <Image Include="pulsar-windows.ico">
       <Filter>资源文件</Filter>
     </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>

@@ -10,6 +10,7 @@
 #include <map>
 #include "cip_window.h"
 #include "cip_protocol.h"
+#include "keymap.h"
 #include <stdint.h>
 #include <mutex>
 #include <ShlObj.h>
@@ -18,8 +19,14 @@
 
 #include <codec_api.h>
 #include <winhttp.h>
-
 #pragma comment(lib, "winhttp")
+
+#include <cpprest\ws_client.h>
+using namespace web;
+using namespace web::websockets::client;
+using namespace std;
+
+#include <cpprest\producerconsumerstream.h>
 
 //#define DEV 1
 
@@ -43,8 +50,6 @@ HINSTANCE hInst;                                // 当前实例
 WCHAR szTitle[MAX_LOADSTRING];                  // 标题栏文本
 WCHAR szWindowClass[MAX_LOADSTRING];            // 主窗口类名
 HWND hWndServer;								// 接受hook消息的主窗口句柄
-typedef std::list<sockaddr_in> CLIENTS;
-CLIENTS clients;
 sockaddr_in sinaddr;
 
 SRWLOCK windowsRWLock;
@@ -53,10 +58,10 @@ SOCKET serSocket;
 SOCKET cliSocket;
 std::mutex sendLock;
 BOOL forceKeyFrame = false;
-std::map<uint8_t, uint8_t> keymap;
 LPTSTR szCmdline = _tcsdup(TEXT("C:\\Windows\\system32\\notepad.exe"));
 LPWSTR token;
 int udp_port = 0; //udp server port
+websocket_callback_client client;
 
 
 // 此代码模块中包含的函数的前向声明: 
@@ -67,122 +72,9 @@ INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 typedef BOOL(CALLBACK *INSTALLHOOK)(HWND, DWORD);
 typedef BOOL(CALLBACK *UNINSTALLHOOK)();
 void sendData(void *payload, int length);
-
-void InitKeymap()
-{
-	keymap[27] = 0x1B;      //  ESC
-	keymap[112] = 0x70;     //  F1
-	keymap[113] = 0x71;     //  F2
-	keymap[114] = 0x72;      // F3
-	keymap[115] = 0x73;     //  F4
-	keymap[116] = 0x74;      // F5
-	keymap[117] = 0x75;    //   F6
-	keymap[118] = 0x76;      // F7
-	keymap[119] = 0x77;     //  F8
-	keymap[120] = 0x78;      // F9
-	keymap[121] = 0x79;     //  F10
-	keymap[122] = 0x7A;    //   F11
-	keymap[123] = 0x7B;     // F12
+void SendDataWs(void *payload, int length);
 
 
-
-	keymap[192] = 0xC0;       //  `
-	keymap[49] = 0x31;        // 1
-	keymap[50] = 0x32;        // 2
-	keymap[51] = 0x33;       //  3
-	keymap[52] = 0x34;        // 4
-	keymap[53] = 0x35;        //5
-	keymap[54] = 0x36;       //  6
-	keymap[55] = 0x37;      //  7
-	keymap[56] = 0x38;       //  8
-	keymap[57] = 0x39;    //    9
-	keymap[48] = 0x30;         //0 
-	keymap[189] = 0xBD;      //-
-	keymap[187] = 0xBB;     //+
-	keymap[8] = 0x08;     //delete
-
-
-	keymap[9] = 0x09;         // Tab;
-	keymap[81] = 0x51;       //    Q
-	keymap[87] = 0x57;        //   W
-	keymap[69] = 0x45;         //  E
-	keymap[82] = 0x52;        //   R
-	keymap[84] = 0x54;        //   T
-	keymap[89] = 0x59;        //   Y
-	keymap[85] = 0x55;         //  U
-	keymap[73] = 0x49;        //   I
-	keymap[79] = 0x4F;        //   O
-	keymap[80] = 0x50;        //   P
-	keymap[219] = 0xDB;     //     [ 
-	keymap[221] = 0xDD;       //   ]
-	keymap[13] = 0x0D;        // Enter
-
-	keymap[20] = 0x14;     // Caps Lock
-	keymap[65] = 0x41;     //  A
-	keymap[83] = 0x53;      // S
-	keymap[68] = 0x44;   //    D
-	keymap[70] = 0x46;       //F
-	keymap[71] = 0x47;      // G
-	keymap[72] = 0x48;     //  H
-	keymap[74] = 0x4A;      // J
-	keymap[75] = 0x4B;      // K
-	keymap[76] = 0x4C;    //   L
-	keymap[186] = 0xBA;    //   ;
-	keymap[222] = 0xDE;   //    " 
-	keymap[220] = 0xDC;    //   \
-
-	keymap[16] = 0x10;         //   SHIFT key
-	keymap[90] = 0x5A;        //   Z
-	keymap[88] = 0x58;         //  X
-	keymap[67] = 0x43;         //  C
-	keymap[86] = 0x56;        //   V
-	keymap[66] = 0x42;        //   B
-	keymap[78] = 0x4E;         //  N
-	keymap[77] = 0x4D;       //   M
-	keymap[188] = 0xBC;     //   <
-	keymap[190] = 0xBE;      //   >
-	keymap[191] = 0xBF;      //   ?
-	keymap[16] = 0x10;          // SHIFT key
-
-	keymap[17] = 0x11;      //  CTRL key
-	keymap[91] = 0xA4;       //Left MENU
-	keymap[18] = 0x12;        //ALT key
-	keymap[32] = 0x20;      //  Spacebar
-	keymap[18] = 0x12;    //    ALT key
-	keymap[92] = 0xA5;     //  Right MENU key
-	keymap[93] = 0x02;    //  Right mouse button
-	keymap[17] = 0x11;     //   CTRL key
-
-	keymap[145] = 0x91;
-	keymap[19] = 0;
-	keymap[144] = 0x90;
-	keymap[111] = 0xBF;
-	keymap[106] = 0x6A;
-	keymap[109] = 0xBD;
-	keymap[45] = 0x2D;
-	keymap[36] = 0x24;
-	keymap[33] = 0x21;
-	keymap[103] = 0x67;
-	keymap[104] = 0x68;
-	keymap[105] = 0x69;
-	keymap[107] = 0xBB;
-	keymap[46] = 0x2E;
-	keymap[35] = 0x23;
-	keymap[34] = 0x22;
-	keymap[100] = 0x64;
-	keymap[101] = 0x65;
-	keymap[102] = 0x66;
-	keymap[38] = 0x26;
-	keymap[97] = 0x61;
-	keymap[98] = 0x62;
-	keymap[99] = 0x63;
-	keymap[13] = 0x0D;
-	keymap[37] = 0x25;
-	keymap[40] = 0x28;
-	keymap[39] = 0x27;
-	keymap[96] = 0x60;
-	keymap[110] = 0xBE;
-}
 
 /* check whether window is top level */
 BOOL isTopWindow(HWND hwnd)
@@ -194,46 +86,81 @@ BOOL isTopWindow(HWND hwnd)
 	return (parent == GetDesktopWindow());
 }
 
-void changeResolution(int width, int height)
+void HandleEvent(void *payload)
 {
-	DISPLAY_DEVICE dd;
-	dd.cb = sizeof(DISPLAY_DEVICE);
-	DEVMODE mode;
-	memset(&mode, 0, sizeof(DEVMODE));
-	mode.dmSize = sizeof(DEVMODE);
-	mode.dmPelsWidth = width;
-	mode.dmPelsHeight = height;
-	mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-	DWORD devNum = 0;
-	while (EnumDisplayDevices(NULL, devNum, &dd, 0)) {
-		ChangeDisplaySettingsEx(dd.DeviceName, &mode, NULL, CDS_UPDATEREGISTRY | CDS_GLOBAL, NULL);
-		devNum++;
+	char *data = (char*)payload;
+	switch (data[0]) {
+	case CIP_EVENT_MOUSE_MOVE: {
+		cip_event_mouse_move_t *cemm = (cip_event_mouse_move_t*)data;
+		// do not use SetCursorPosB, it will conflict with each user
+		// SetCursorPos(cemm->x, cemm->y);
+		INPUT input;
+		input.type = INPUT_MOUSE;
+		input.mi.mouseData = 0;
+		int x = cemm->x; //fix position
+		int y = cemm->y; //fix position
+						 /*if (x > (rc.right - rc.left - 5)) {
+						 x = rc.right - rc.left - 5;
+						 }
+						 if (y > (rc.bottom - rc.top - 41)) {
+						 y = rc.bottom - rc.top - 41;
+						 }*/
+		input.mi.dx = 65535 * x / (GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
+		input.mi.dy = 65536 * y / (GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
+		input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
+		SendInput(1, &input, sizeof(input));
+		break;
 	}
-}
-
-void recover(sockaddr_in client)
-{
-	std::map<int, cip_window_t*>::iterator it;
-	for (it = windows.begin(); it != windows.end(); it++) {
-		cip_window_t *window = it->second;
-		cip_event_window_create_t cewc;
-		cewc.type = CIP_EVENT_WINDOW_CREATE;
-		cewc.wid = window->wid;
-		cewc.x = window->x;
-		cewc.y = window->y;
-		cewc.width = window->width;
-		cewc.height = window->height;
-		cewc.bare = 1;
-		sendData((char*)&cewc, sizeof(cewc));
-		//DWORD dwStyle = GetWindowLong(hwnd, GWL_STYLE);
-		if (IsWindowVisible((HWND)window->wid)) {
-			window->visible = true;
-			cip_event_window_show_t cews;
-			cews.type = CIP_EVENT_WINDOW_SHOW;
-			cews.wid = window->wid;
-			cews.bare = 1;
-			sendData(&cews, sizeof(cews));
+	case CIP_EVENT_MOUSE_DOWN: {
+		cip_event_mouse_down_t *cemd = (cip_event_mouse_down_t*)data;
+		INPUT input;
+		input.type = INPUT_MOUSE;
+		if (cemd->code == 1) {
+			input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+		} else if (cemd->code == 3) {
+			input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
 		}
+		SendInput(1, &input, sizeof(input));
+		break;
+	}
+	case CIP_EVENT_MOUSE_UP: {
+		cip_event_mouse_up_t *cemd = (cip_event_mouse_up_t*)data;
+		INPUT input;
+		input.type = INPUT_MOUSE;
+		if (cemd->code == 1) {
+			input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+		} else if (cemd->code == 3) {
+			input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
+		}
+		SendInput(1, &input, sizeof(input));
+		break;
+	}
+	case CIP_EVENT_KEY_DOWN: {
+		cip_event_key_down_t *cekd = (cip_event_key_down_t*)data;
+		INPUT input;
+		input.type = INPUT_KEYBOARD;
+		input.ki.time = 0;
+		input.ki.wVk = keymap[cekd->code];
+		input.ki.dwExtraInfo = 0;
+		input.ki.dwFlags = 0;
+		input.ki.wScan = 0;
+		SendInput(1, &input, sizeof(input));
+		break;
+	}
+	case CIP_EVENT_KEY_UP: {
+		cip_event_key_up_t *ceku = (cip_event_key_up_t*)data;
+		INPUT input;
+		input.type = INPUT_KEYBOARD;
+		input.ki.time = 0;
+		input.ki.wVk = keymap[ceku->code];
+		input.ki.dwExtraInfo = 0;
+		input.ki.dwFlags = KEYEVENTF_KEYUP;
+		input.ki.wScan = 0;
+		SendInput(1, &input, sizeof(input));
+		break;
+	}
+	default:
+		break;
 	}
 }
 
@@ -276,79 +203,7 @@ int CreateUDPClient()
 		if (recvlen <= 0) {
 			continue;
 		}
-		switch (data[0]) {
-		case CIP_EVENT_MOUSE_MOVE: {
-			cip_event_mouse_move_t *cemm = (cip_event_mouse_move_t*)data;
-			// do not use SetCursorPosB, it will conflict with each user
-			// SetCursorPos(cemm->x, cemm->y);
-			INPUT input;
-			input.type = INPUT_MOUSE;
-			input.mi.mouseData = 0;
-			int x = cemm->x; //fix position
-			int y = cemm->y; //fix position
-			/*if (x > (rc.right - rc.left - 5)) {
-				x = rc.right - rc.left - 5;
-			}
-			if (y > (rc.bottom - rc.top - 41)) {
-				y = rc.bottom - rc.top - 41;
-			}*/
-			input.mi.dx = 65535 * x / (GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
-			input.mi.dy = 65536 * y / (GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
-			input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_MOUSE_DOWN: {
-			cip_event_mouse_down_t *cemd = (cip_event_mouse_down_t*)data;
-			INPUT input;
-			input.type = INPUT_MOUSE;
-			if (cemd->code == 1) {
-				input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-			} else if (cemd->code == 3) {
-				input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
-			}
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_MOUSE_UP: {
-			cip_event_mouse_up_t *cemd = (cip_event_mouse_up_t*)data;
-			INPUT input;
-			input.type = INPUT_MOUSE;
-			if (cemd->code == 1) {
-				input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-			} else if (cemd->code == 3) {
-				input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
-			}
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_KEY_DOWN: {
-			cip_event_key_down_t *cekd = (cip_event_key_down_t*)data;
-			INPUT input;
-			input.type = INPUT_KEYBOARD;
-			input.ki.time = 0;
-			input.ki.wVk = keymap[cekd->code];
-			input.ki.dwExtraInfo = 0;
-			input.ki.dwFlags = 0;
-			input.ki.wScan = 0;
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_KEY_UP: {
-			cip_event_key_up_t *ceku = (cip_event_key_up_t*)data;
-			INPUT input;
-			input.type = INPUT_KEYBOARD;
-			input.ki.time = 0;
-			input.ki.wVk = keymap[ceku->code];
-			input.ki.dwExtraInfo = 0;
-			input.ki.dwFlags = KEYEVENTF_KEYUP;
-			input.ki.wScan = 0;
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		default:
-			break;
-		}
+		HandleEvent(data);
 	}
 	closesocket(cliSocket);
 	WSACleanup();
@@ -373,156 +228,10 @@ DWORD WINAPI TickInfo(LPVOID lp)
 	return 0;
 }
 
-int CreateUDPServer()
-{
-	WSADATA wsaData;
-	int iResult;
-
-	// Initialize Winsock
-	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-	if (iResult != 0) {
-		return 1;
-	}
-
-	serSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (serSocket == INVALID_SOCKET) {
-		WSACleanup();
-		return 1;
-	}
-
-	sockaddr_in serAddr;
-	serAddr.sin_family = AF_INET;
-	serAddr.sin_port = 0; // htons(24055);
-	serAddr.sin_addr.S_un.S_addr = INADDR_ANY;
-	if (bind(serSocket, (sockaddr*)&serAddr, sizeof(serAddr)) == SOCKET_ERROR) {
-		closesocket(serSocket);
-		WSACleanup();
-		return 1;
-	}
-
-	/* get udp server random port*/
-	sockaddr_in info;
-	memset(&info, 0, sizeof(info));
-	int info_len = sizeof(info);
-	getsockname(serSocket, (sockaddr*)&info, &info_len);
-
-	/* set udp port to global varible */
-	udp_port = ntohs(info.sin_port);
-
-	/* write port info to file c:/users/%user%/pulsar-port.txt */
-	WCHAR filepath[128];
-	memset(filepath, 0, sizeof(filepath));
-	PWSTR path = NULL;
-	SHGetKnownFolderPath(FOLDERID_Profile, 0, NULL, &path);
-	wcscat_s(filepath, 128, path);
-	wcscat_s(filepath, 128, _T("/pulsar-port.txt"));
-
-	HANDLE fp = CreateFile(filepath, GENERIC_ALL, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-	char buf[10];
-	memset(buf, 0, 10);
-	_itoa_s(udp_port, buf, 10);
-	DWORD written = 0;
-	WriteFile(fp, buf, strlen(buf), &written, NULL);
-	CloseHandle(fp);
-
-	HWND hDesktop = GetDesktopWindow();
-	RECT rc;
-	GetWindowRect(hDesktop, &rc);
-
-	sockaddr_in cliAddr;
-	int addrLen = sizeof(cliAddr);
-	while (true) {
-		char data[255];
-		memset(data, 0, 255);
-		int len = recvfrom(serSocket, data, 255, 0, (sockaddr*)&cliAddr, &addrLen);
-		//MessageBox(NULL, _T("ok"), _T("i"), MB_OK);
-		if (strcmp(data, "listen") == 0) {
-			clients.push_back(cliAddr);
-			recover(cliAddr);
-			forceKeyFrame = true;
-			continue;
-		}
-		switch (data[0]) {
-		case CIP_EVENT_MOUSE_MOVE: {
-			cip_event_mouse_move_t *cemm = (cip_event_mouse_move_t*)data;
-			// do not use SetCursorPosB, it will conflict with each user
-			// SetCursorPos(cemm->x, cemm->y);
-			INPUT input;
-			input.type = INPUT_MOUSE;
-			input.mi.mouseData = 0;
-			int x = cemm->x + 1; //fix position
-			int y = cemm->y + 1; //fix position
-			if (x > (rc.right - rc.left - 5)) {
-				x = rc.right - rc.left - 5;
-			}
-			if (y > (rc.bottom - rc.top - 41)) {
-				y = rc.bottom - rc.top - 41;
-			}
-			input.mi.dx = 65535 * x / (GetSystemMetrics(SM_CXSCREEN));//x being coord in pixels
-			input.mi.dy = 65536 * y / (GetSystemMetrics(SM_CYSCREEN));//y being coord in pixels
-			input.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE;
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_MOUSE_DOWN: {
-			cip_event_mouse_down_t *cemd = (cip_event_mouse_down_t*)data;
-			INPUT input;
-			input.type = INPUT_MOUSE;
-			if (cemd->code == 1) {
-				input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-			} else if (cemd->code == 3) {
-				input.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
-			}
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_MOUSE_UP: {
-			cip_event_mouse_up_t *cemd = (cip_event_mouse_up_t*)data;
-			INPUT input;
-			input.type = INPUT_MOUSE;
-			if (cemd->code == 1) {
-				input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-			} else if (cemd->code == 3) {
-				input.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
-			}
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_KEY_DOWN: {
-			cip_event_key_down_t *cekd = (cip_event_key_down_t*)data;
-			INPUT input;
-			input.type = INPUT_KEYBOARD;
-			input.ki.time = 0;
-			input.ki.wVk = keymap[cekd->code];
-			input.ki.dwExtraInfo = 0;
-			input.ki.dwFlags = 0;
-			input.ki.wScan = 0;
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		case CIP_EVENT_KEY_UP: {
-			cip_event_key_up_t *ceku = (cip_event_key_up_t*)data;
-			INPUT input;
-			input.type = INPUT_KEYBOARD;
-			input.ki.time = 0;
-			input.ki.wVk = keymap[ceku->code];
-			input.ki.dwExtraInfo = 0;
-			input.ki.dwFlags = KEYEVENTF_KEYUP;
-			input.ki.wScan = 0;
-			SendInput(1, &input, sizeof(input));
-			break;
-		}
-		default:
-			break;
-		}
-
-	}
-}
-
 DWORD WINAPI ServerThread(LPVOID lp)
 {
 	//CreateUDPServer();
-	CreateUDPClient();
+	//CreateUDPClient();
 	return 0;
 }
 
@@ -531,145 +240,6 @@ void toeven(size_t *num)
 	if (*num % 4) {
 		*num = *num - (*num % 4);
 	}
-}
-
-
-static __inline int RGBToY(uint8 r, uint8 g, uint8 b) {
-	return (66 * r + 129 * g + 25 * b + 0x1080) >> 8;
-}
-
-static __inline int RGBToU(uint8 r, uint8 g, uint8 b) {
-	return (112 * b - 74 * g - 38 * r + 0x8080) >> 8;
-}
-static __inline int RGBToV(uint8 r, uint8 g, uint8 b) {
-	return (112 * r - 94 * g - 18 * b + 0x8080) >> 8;
-}
-
-
-#define MAKEROWY(NAME, R, G, B, BPP) \
-void NAME ## ToYRow_C(const uint8* src_argb0, uint8* dst_y, int width) {       \
-int x;                                                                       \
-for (x = 0; x < width; ++x) {                                                \
-dst_y[0] = RGBToY(src_argb0[R], src_argb0[G], src_argb0[B]);               \
-src_argb0 += BPP;                                                          \
-dst_y += 1;                                                                \
-}                                                                            \
-}                                                                              \
-void NAME ## ToUVRow_C(const uint8* src_rgb0, int src_stride_rgb,              \
-uint8* dst_u, uint8* dst_v, int width) {                \
-const uint8* src_rgb1 = src_rgb0 + src_stride_rgb;                           \
-int x;                                                                       \
-for (x = 0; x < width - 1; x += 2) {                                         \
-uint8 ab = (src_rgb0[B] + src_rgb0[B + BPP] +                              \
-src_rgb1[B] + src_rgb1[B + BPP]) >> 2;                          \
-uint8 ag = (src_rgb0[G] + src_rgb0[G + BPP] +                              \
-src_rgb1[G] + src_rgb1[G + BPP]) >> 2;                          \
-uint8 ar = (src_rgb0[R] + src_rgb0[R + BPP] +                              \
-src_rgb1[R] + src_rgb1[R + BPP]) >> 2;                          \
-dst_u[0] = RGBToU(ar, ag, ab);                                             \
-dst_v[0] = RGBToV(ar, ag, ab);                                             \
-src_rgb0 += BPP * 2;                                                       \
-src_rgb1 += BPP * 2;                                                       \
-dst_u += 1;                                                                \
-dst_v += 1;                                                                \
-}                                                                            \
-if (width & 1) {                                                             \
-uint8 ab = (src_rgb0[B] + src_rgb1[B]) >> 1;                               \
-uint8 ag = (src_rgb0[G] + src_rgb1[G]) >> 1;                               \
-uint8 ar = (src_rgb0[R] + src_rgb1[R]) >> 1;                               \
-dst_u[0] = RGBToU(ar, ag, ab);                                             \
-dst_v[0] = RGBToV(ar, ag, ab);                                             \
-}                                                                            \
-}
-
-MAKEROWY(ARGB, 2, 1, 0, 4)
-
-void ARGBToI420x(const uint8_t* src_argb,
-	uint8_t* dst_y,
-	uint8_t* dst_u,
-	uint8_t* dst_v,
-	int width, int height)
-{
-	int x, y;
-	for (y = 0; y < height - 1; y += 2) {
-		for (x = 0; x < width - 1; x += 2) {
-
-		}
-	}
-}
-
-int ARGBToI420(const uint8_t* src_argb, int src_stride_argb,
-	uint8_t* dst_y, int dst_stride_y,
-	uint8_t* dst_u, int dst_stride_u,
-	uint8_t* dst_v, int dst_stride_v,
-	int width, int height) {
-	int y;
-	void(*ARGBToUVRow)(const uint8_t* src_argb0, int src_stride_argb,
-		uint8* dst_u, uint8_t* dst_v, int width) = ARGBToUVRow_C;
-	void(*ARGBToYRow)(const uint8* src_argb, uint8_t* dst_y, int pix) =
-		ARGBToYRow_C;
-	if (!src_argb ||
-		!dst_y || !dst_u || !dst_v ||
-		width <= 0 || height == 0) {
-		return -1;
-	}
-	// Negative height means invert the image.
-	if (height < 0) {
-		height = -height;
-		src_argb = src_argb + (height - 1) * src_stride_argb;
-		src_stride_argb = -src_stride_argb;
-	}
-
-	for (y = 0; y < height - 1; y += 2) {
-		ARGBToUVRow(src_argb, src_stride_argb, dst_u, dst_v, width);
-		ARGBToYRow(src_argb, dst_y, width);
-		ARGBToYRow(src_argb + src_stride_argb, dst_y + dst_stride_y, width);
-		src_argb += src_stride_argb * 2;
-		dst_y += dst_stride_y * 2;
-		dst_u += dst_stride_u;
-		dst_v += dst_stride_v;
-	}
-	if (height & 1) {
-		ARGBToUVRow(src_argb, 0, dst_u, dst_v, width);
-		ARGBToYRow(src_argb, dst_y, width);
-	}
-	return 0;
-}
-
-
-
-RECT getDamageRect()
-{
-	RECT rc;
-	memset(&rc, 0, sizeof(rc));
-	rc.left = 10000;
-	rc.top = 10000;
-	rc.right = 0;
-	rc.bottom = 0;
-	std::map<int, cip_window_t*>::iterator it;
-	for (it = windows.begin(); it != windows.end(); it++) {
-		if (!it->second->visible) {
-			continue;
-		}
-		if (it->second->x < rc.left) {
-			rc.left = it->second->x;
-		}
-		if (it->second->y < rc.top) {
-			rc.top = it->second->y;
-		}
-		if (it->second->x + it->second->width > rc.right) {
-			rc.right = it->second->x + it->second->width;
-		}
-		if (it->second->y + it->second->height > rc.bottom) {
-			rc.bottom = it->second->y + it->second->height;
-		}
-	}
-
-	/* no visible windows */
-	if (rc.left > rc.right) {
-		rc.left = rc.right = rc.top = rc.bottom = 0;
-	}
-	return rc;
 }
 
 DWORD WINAPI ScreenStreamThread(LPVOID lp)
@@ -687,23 +257,22 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 
 	SEncParamExt param;
 	encoder->GetDefaultParams(&param);
-	param.iUsageType = CAMERA_VIDEO_REAL_TIME;
+	param.iUsageType = SCREEN_CONTENT_REAL_TIME;
 	param.fMaxFrameRate = 30;
 	param.iPicWidth = width;
 	param.iPicHeight = height;
-	param.iTargetBitrate = 3200000;
+	param.iTargetBitrate = 300000;
 	param.uiMaxNalSize = 65000;
 	param.iEntropyCodingModeFlag = 0;
 	param.bEnableDenoise = 0;
 	param.bPrefixNalAddingCtrl = false;
 	param.iTemporalLayerNum = 1;
 	param.iSpatialLayerNum = 1;
-	param.uiIntraPeriod = 50;
+	param.uiIntraPeriod = 250;
 	param.bEnableAdaptiveQuant = 1;
 	param.bEnableBackgroundDetection = 1;
 	param.bEnableFrameSkip = 0;
 	param.bEnableLongTermReference = 0;
-	param.iLtrMarkPeriod = 30;
 	param.iRCMode = RC_QUALITY_MODE;
 	param.iComplexityMode = LOW_COMPLEXITY;
 
@@ -712,7 +281,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 		param.sSpatialLayers[i].iVideoHeight = height >> (param.iSpatialLayerNum - 1 - i);
 		param.sSpatialLayers[i].fFrameRate = 30;
 		param.sSpatialLayers[i].iSpatialBitrate = param.iTargetBitrate;
-		param.sSpatialLayers[i].sSliceArgument.uiSliceMode = SM_SINGLE_SLICE;
+		param.sSpatialLayers[i].sSliceArgument.uiSliceMode = SM_SIZELIMITED_SLICE;
 		param.sSpatialLayers[i].sSliceArgument.uiSliceNum = 0;
 	}
 
@@ -751,10 +320,6 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	const int inLinesize[1] = { 4 * width };
 	
 	while (true) {
-		/*if (clients.empty()) {
-			Sleep(1000);
-			continue;
-		}*/
 		BitBlt(memDC, 0, 0, width, height, desktopDC, 0, 0, SRCCOPY);
 
 		BITMAPINFOHEADER bmi = { 0 };
@@ -785,12 +350,12 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 					p->type = CIP_EVENT_WINDOW_FRAME;
 					p->wid = 0;
 					memcpy(buf + sizeof(cip_event_window_frame_ws_t), &(info.sLayerInfo[layer].pBsBuf[x]), info.sLayerInfo[layer].pNalLengthInByte[i]);
-					sendData(buf, length);
+					SendDataWs(buf, length);
 					x += info.sLayerInfo[layer].pNalLengthInByte[i];
 				}
 			}
 		}
-		
+		//Sleep(100);
 	}
 	sws_freeContext(ctx);
 	free(buf);
@@ -832,7 +397,8 @@ err:
 	CloseHandle(pi.hThread);
 	cip_event_exit_t ext;
 	ext.type = CIP_EVENT_EXIT;
-	sendData(&ext, sizeof(ext));
+	SendDataWs(&ext, sizeof(ext));
+	client.close().then([]() { /* Successfully closed the connection. */ });
 #ifndef DEV
 	/* logout user */
 	ExitWindowsEx(EWX_LOGOFF, SHTDN_REASON_FLAG_PLANNED);
@@ -889,10 +455,29 @@ void sendData(void *payload, int length)
 {
 	sendLock.lock();
 	sendto(cliSocket, (char*)payload, length, 0, (sockaddr*)&sinaddr, sizeof(sockaddr_in));
-	/*CLIENTS::iterator i;
-	for (i = clients.begin(); i != clients.end(); i++) {
-		sendto(serSocket, (char*)payload, length, 0, (sockaddr*)&(*i), sizeof(sockaddr_in));
-	}*/
+	sendLock.unlock();
+}
+
+void SendDataWs(void *payload, int length)
+{
+	sendLock.lock();
+	websocket_outgoing_message msg;
+	concurrency::streams::producer_consumer_buffer<uint8_t> buf;
+	std::vector<uint8_t> body(length);
+	memcpy(&body[0], payload, length);
+
+	auto send_task = buf.putn(&body[0], body.size()).then([&](size_t length) {
+		msg.set_binary_message(buf.create_istream(), length);
+		return client.send(msg);
+	}).then([](pplx::task<void> t)
+	{
+		try {
+			t.get();
+		} catch (const websocket_exception& ex) {
+			std::cout << ex.what();
+		}
+	});
+	send_task.wait();
 	sendLock.unlock();
 }
 
@@ -910,8 +495,24 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    // TODO: 在此放置代码。
-	//Sleep(3000); // wait for desktop init
+	int nArgs;
+	LPWSTR *szArglist;
+	szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
+	szCmdline = szArglist[1];
+	token = szArglist[2];
+	OutputDebugString(token);
+
+	wstring tokenw(token);
+	wstring addr = L"ws://10.10.219.132:9000/?type=server&token=" + tokenw;
+	//wstring addr = L"ws://192.168.1.202:9999/?type=server&token=" + tokenw;
+	client.connect(addr).then([]() {}).wait();
+
+	client.set_message_handler([](websocket_incoming_message msg) {
+		uint8_t bf[100];
+		msg.body().streambuf().getn(bf, msg.body().streambuf().size());
+		HandleEvent(bf);
+	});
+
 	InitializeSRWLock(&windowsRWLock);
 	WCHAR filepath[128];
 	memset(filepath, 0, sizeof(filepath));
@@ -925,16 +526,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		return 0;
 	}
 
-	int nArgs;
-	LPWSTR *szArglist;
-	szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
-
-	if (_tcscmp(szArglist[1], _T("")) != 0) {
-		szCmdline = szArglist[1];
-	}
-
-	token = szArglist[2];
-	OutputDebugString(token);
 
 	InitKeymap();
 
@@ -956,7 +547,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 #ifndef DEV
 	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
 #endif
-	CreateThread(NULL, 0, TickInfo, NULL, 0, NULL);
+	//CreateThread(NULL, 0, TickInfo, NULL, 0, NULL);
 	//ScreenStreamThread(NULL);
 	// begin dll injection
 	HINSTANCE hDll = LoadLibrary(TEXT("hook.dll"));
@@ -976,7 +567,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	//changeResolution(500, 500);
 
 	CreateThread(NULL, 0, RunCloudware, NULL, 0, NULL);
-	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
+	//CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
 
     MSG msg;
 
@@ -1004,7 +595,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				cewc.width = window->width;
 				cewc.height = window->height;
 				cewc.bare = 1;
-				sendData((char*)&cewc, sizeof(cewc));
+				SendDataWs((char*)&cewc, sizeof(cewc));
 				//DWORD dwStyle = GetWindowLong(hwnd, GWL_STYLE);
 				if (IsWindowVisible(hwnd)) {
 						window->visible = true;
@@ -1012,7 +603,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 						cews.type = CIP_EVENT_WINDOW_SHOW;
 						cews.wid = (uint32_t)hwnd;
 						cews.bare = 1;
-						sendData(&cews, sizeof(cews));
+						SendDataWs(&cews, sizeof(cews));
 				}
 				
 			}
@@ -1029,7 +620,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			cip_event_window_destroy_t cewd;
 			cewd.type = CIP_EVENT_WINDOW_DESTROY;
 			cewd.wid = (u32)msg.wParam;
-			sendData(&cewd, sizeof(cewd));
+			SendDataWs(&cewd, sizeof(cewd));
 			AcquireSRWLockExclusive(&windowsRWLock);
 			windows.erase((int)msg.wParam);
 			ReleaseSRWLockExclusive(&windowsRWLock);
@@ -1052,12 +643,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				cews.type = CIP_EVENT_WINDOW_SHOW;
 				cews.wid = (uint32_t)hwnd;
 				cews.bare = 1;
-				sendData(&cews, sizeof(cews));
+				SendDataWs(&cews, sizeof(cews));
 			} else {
 				cip_event_window_hide_t cewh;
 				cewh.type = CIP_EVENT_WINDOW_HIDE;
 				cewh.wid = (uint32_t)hwnd;
-				sendData(&cewh, sizeof(cewh));
+				SendDataWs(&cewh, sizeof(cewh));
 			}
 			break;
 		}
@@ -1085,7 +676,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			cewc.height = rc.bottom - rc.top;
 			cewc.bare = 1;
 			cewc.above = 0;
-			sendData(&cewc, sizeof(cewc));
+			SendDataWs(&cewc, sizeof(cewc));
 			cip_window_t *win = windows[(u32)hwnd];
 			if (win->width != cewc.width || win->height != cewc.height) {
 				win->width = cewc.width;
@@ -1117,7 +708,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			cewc.height = rc.bottom - rc.top;
 			cewc.bare = 1;
 			cewc.above = 0;
-			sendData(&cewc, sizeof(cewc));
+			SendDataWs(&cewc, sizeof(cewc));
 			windows[(int)msg.wParam]->x = rc.left;
 			windows[(int)msg.wParam]->y = rc.top;
 			break;
@@ -1171,7 +762,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 			payload[1] = iconInfo.xHotspot;
 			payload[2] = iconInfo.yHotspot;
 			memcpy(&payload[3], data, bytes_streamed);
-			sendData(payload, 3 + bytes_streamed);
+			SendDataWs(payload, 3 + bytes_streamed);
 			free(payload);
 
 			GlobalUnlock(mem);
