@@ -22,8 +22,8 @@ using namespace web::websockets::client;
 using namespace std;
 
 LPTSTR szCmdline;
-typedef BOOL(CALLBACK *INSTALLHOOK)(HWND, DWORD);
-typedef BOOL(CALLBACK *UNINSTALLHOOK)();
+typedef int(_cdecl *INSTALLHOOK)(HWND, DWORD);
+typedef int(_cdecl *UNINSTALLHOOK)();
 wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 websocket_callback_client client;
 mutex sendLock;
@@ -306,6 +306,7 @@ void HandleEvent(void *payload)
 
 DWORD WINAPI RunCloudware(LPVOID lp)
 {
+	Sleep(500);
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
 
@@ -337,8 +338,52 @@ err:
 	ext.type = CIP_EVENT_EXIT;
 	SendDataWs(&ext, sizeof(ext));
 	client.close().then([]() { /* Successfully closed the connection. */ });
+	Sleep(1000);
 	/* TODO: clean memory and exit*/
 	exit(0);
+}
+
+DWORD WINAPI SyncState(LPVOID lp)
+{
+	while (true) {
+		Sleep(4000);
+		std::map<int, cip_window_t*>::iterator it;
+		AcquireSRWLockShared(&windowsRWLock);
+		for (it = windows.begin(); it != windows.end(); it++) {
+			cip_window_t *window = it->second;
+			BOOL visible = IsWindowVisible((HWND)window->wid);
+			if (visible) {
+				window->visible = visible;
+				cip_event_window_show_t cews;
+				cews.type = CIP_EVENT_WINDOW_SHOW;
+				cews.wid = window->wid;
+				cews.bare = 1;
+				SendDataWs(&cews, sizeof(cews));
+			} else {
+				window->visible = visible;
+				cip_event_window_show_t cews;
+				cews.type = CIP_EVENT_WINDOW_HIDE;
+				cews.wid = window->wid;
+				cews.bare = 1;
+				SendDataWs(&cews, sizeof(cews));
+			}
+			//Sleep(1000);
+			RECT rc;
+			GetWindowRect((HWND)window->wid, &rc);
+			cip_event_window_configure_t cewc;
+			cewc.type = CIP_EVENT_WINDOW_CONFIGURE;
+			cewc.wid = window->wid;
+			cewc.x = rc.left;
+			cewc.y = rc.top;
+			cewc.width = rc.right - rc.left;
+			cewc.height = rc.bottom - rc.top;
+			cewc.bare = 1;
+			cewc.above = 0;
+			SendDataWs(&cewc, sizeof(cewc));
+		}
+		ReleaseSRWLockShared(&windowsRWLock);
+	}
+
 }
 
 int main(int argc, char *argv[])
@@ -357,7 +402,6 @@ int main(int argc, char *argv[])
 	InitKeymap();
 
 	FreeConsole();
-	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
 
 	/* create window */
 	const LPCWSTR myclass = L"myclass";
@@ -382,6 +426,7 @@ int main(int argc, char *argv[])
 	HWND miWindow = CreateWindowEx(0, myclass, L"title", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 200, 100, 0, 0, GetModuleHandle(0), 0);
 	/* /create window */
 
+	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
 	/* install hook */
 	HINSTANCE hDll = LoadLibrary(TEXT("hook.dll"));
 	if (!hDll) {
@@ -399,6 +444,7 @@ int main(int argc, char *argv[])
 	}
 	/* /install hook */
 	CreateThread(NULL, 0, RunCloudware, NULL, 0, NULL);
+	CreateThread(NULL, 0, SyncState, NULL, 0, NULL);
 	//ShowWindow(miWindow, SW_SHOWDEFAULT);
 	InitializeSRWLock(&windowsRWLock);
 	MSG msg;
@@ -604,6 +650,7 @@ int main(int argc, char *argv[])
 		default:
 			break;
 		}
+		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
     return 0;

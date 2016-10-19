@@ -1,7 +1,6 @@
 // dllmain.cpp : 定义 DLL 应用程序的入口点。
 #include "stdafx.h"
 
-
 #pragma data_seg(".shared")
 HINSTANCE hInstance = NULL;
 HHOOK hHookCBT = NULL;
