@@ -356,7 +356,7 @@ int main(int argc, char *argv[])
 	});
 	InitKeymap();
 
-
+	FreeConsole();
 	CreateThread(NULL, 0, ScreenStreamThread, NULL, 0, NULL);
 
 	/* create window */
