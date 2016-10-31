@@ -110,7 +110,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	SEncParamExt param;
 	encoder->GetDefaultParams(&param);
 	param.iUsageType = SCREEN_CONTENT_REAL_TIME;
-	param.fMaxFrameRate = 30;
+	param.fMaxFrameRate = 75;
 	param.iPicWidth = width;
 	param.iPicHeight = height;
 	param.iTargetBitrate = 300000;
@@ -131,7 +131,7 @@ DWORD WINAPI ScreenStreamThread(LPVOID lp)
 	for (int i = 0; i < param.iSpatialLayerNum; i++) {
 		param.sSpatialLayers[i].iVideoWidth = width >> (param.iSpatialLayerNum - 1 - i);
 		param.sSpatialLayers[i].iVideoHeight = height >> (param.iSpatialLayerNum - 1 - i);
-		param.sSpatialLayers[i].fFrameRate = 30;
+		param.sSpatialLayers[i].fFrameRate = 75;
 		param.sSpatialLayers[i].iSpatialBitrate = param.iTargetBitrate;
 		param.sSpatialLayers[i].sSliceArgument.uiSliceMode = SM_SIZELIMITED_SLICE;
 		param.sSpatialLayers[i].sSliceArgument.uiSliceNum = 0;
@@ -346,7 +346,7 @@ err:
 DWORD WINAPI SyncState(LPVOID lp)
 {
 	while (true) {
-		Sleep(4000);
+		Sleep(16000);
 		std::map<int, cip_window_t*>::iterator it;
 		AcquireSRWLockShared(&windowsRWLock);
 		for (it = windows.begin(); it != windows.end(); it++) {
